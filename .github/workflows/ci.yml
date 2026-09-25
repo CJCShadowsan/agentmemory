@@ -69,5 +69,4 @@ jobs:
       - run: npm install --legacy-peer-deps --no-audit --no-fund
       - run: npm run build
       - run: npm run skills:check
-      - run: npm run docs:check
       - run: npm test

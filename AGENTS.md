@@ -11,7 +11,7 @@ agentmemory is a persistent memory system for AI coding agents, built on iii-eng
 
 ## Consistency Rules
 
-**Documented numbers and versions are synced by `npm run docs:sync`.** It computes MCP tool counts (all, core, local fallback), REST endpoints, skills, hooks, tests, iii functions, source files, lines of code and KV scopes from the source, and rewrites them in README.md, the translated READMEs, AGENTS.md, INSTALL_FOR_AGENTS.md, plugin manifests, integration READMEs, the stat badges and the `src/index.ts` banner. The last synced values live in `scripts/docs-sync.state.json`. The Docs sync workflow runs it on every pull request and commits the result to the branch, and CI fails on drift with `npm run docs:check`. When it reports `check <fact> <old> left in <file>`, that phrasing needs a noun added to the fact in `scripts/docs-sync.ts`.
+**Before every commit, run `npm run docs:sync` and commit what it changes.** It computes MCP tool counts (all, core, local fallback), REST endpoints, skills, hooks, tests, iii functions, source files, lines of code and KV scopes from the source, and rewrites them in README.md, the translated READMEs, AGENTS.md, INSTALL_FOR_AGENTS.md, plugin manifests, integration READMEs, the stat badges and the `src/index.ts` banner. The last synced values live in `scripts/docs-sync.state.json`; commit that file with the rest. `npm run docs:check` exits non-zero when anything is out of date. When the sync prints `check <fact> <old> left in <file>`, open that line: either fix it by hand or add its noun to the fact in `scripts/docs-sync.ts` so the next sync catches it. Never hand-edit these numbers or versions in the docs; change the source and sync.
 
 **When adding or removing MCP tools, update:**
 1. `src/mcp/tools-registry.ts` — tool definition + `getAllTools()` array
@@ -101,7 +101,7 @@ Hook scripts in `src/hooks/` are standalone Node.js scripts (no iii-sdk import).
 
 ## Testing
 
-- All tests must pass before PR: `npm test` (1,700+ tests)
+- Before every commit run, in order: `npm run build`, `npm run skills:gen`, `npm run docs:sync`, `npm run skills:check`, `npm test` (1,700+ tests). Commit anything the generators changed. CI runs the same build, skills check and tests.
 - Mock pattern: `vi.mock("iii-sdk")` with mock `sdk.trigger`, `kv.get/set/list`
 - Test files go in `test/` with `.test.ts` extension
 - Follow existing patterns in `test/crystallize.test.ts` for function tests
