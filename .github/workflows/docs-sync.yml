@@ -1,0 +1,82 @@
+name: Docs sync
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: docs-sync-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      SYNC_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+          token: ${{ secrets.DOCS_SYNC_TOKEN || github.token }}
+          persist-credentials: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm install --legacy-peer-deps --no-audit --no-fund
+      - name: Sync documented numbers and versions
+        run: npm run docs:sync
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat
+          fi
+      - name: Fork pull request
+        if: steps.diff.outputs.changed == 'true' && env.SAME_REPO != 'true'
+        run: |
+          echo "::error::Documented numbers or versions are out of date. Run 'npm run docs:sync' and commit the result."
+          exit 1
+      - name: Commit to the pull request branch
+        if: steps.diff.outputs.changed == 'true' && env.SAME_REPO == 'true' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(docs): sync documented numbers and versions"
+          git push origin "HEAD:$BRANCH"
+          if [ -z "$SYNC_TOKEN" ]; then
+            gh workflow run ci.yml --ref "$BRANCH"
+          fi
+      - name: Open a sync pull request from main
+        if: steps.diff.outputs.changed == 'true' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::main has out-of-date documented numbers. Run 'npm run docs:sync' on a branch and open a PR, or add a DOCS_SYNC_TOKEN secret so this job opens one."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c chore/docs-sync
+          git commit -am "chore(docs): sync documented numbers and versions"
+          git push --force origin chore/docs-sync
+          if [ -z "$(gh pr list --head chore/docs-sync --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base main --head chore/docs-sync \
+              --title "chore(docs): sync documented numbers and versions" \
+              --body "Automated by the Docs sync workflow after a merge to main changed a documented count or version."
+          fi

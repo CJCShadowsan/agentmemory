@@ -11,29 +11,19 @@ agentmemory is a persistent memory system for AI coding agents, built on iii-eng
 
 ## Consistency Rules
 
-**When adding or removing MCP tools, you MUST update ALL of the following:**
+**Documented numbers and versions are synced by `npm run docs:sync`.** It computes MCP tool counts (all, core, local fallback), REST endpoints, skills, hooks, tests, iii functions, source files, lines of code and KV scopes from the source, and rewrites them in README.md, the translated READMEs, AGENTS.md, INSTALL_FOR_AGENTS.md, plugin manifests, integration READMEs, the stat badges and the `src/index.ts` banner. The last synced values live in `scripts/docs-sync.state.json`. The Docs sync workflow runs it on every pull request and commits the result to the branch, and CI fails on drift with `npm run docs:check`. When it reports `check <fact> <old> left in <file>`, that phrasing needs a noun added to the fact in `scripts/docs-sync.ts`.
+
+**When adding or removing MCP tools, update:**
 1. `src/mcp/tools-registry.ts` — tool definition + `getAllTools()` array
 2. `src/mcp/server.ts` — handler case in the `mcp::tools::call` switch
 3. `src/triggers/api.ts` — REST endpoint registration
-4. `src/index.ts` — function registration + endpoint count in the log line
+4. `src/index.ts` — function registration
 5. `test/mcp-standalone.test.ts` — tool count assertion
-6. `README.md` — tool counts (search for "MCP tools")
-7. `plugin/.claude-plugin/plugin.json` — tool count in description
-8. `plugin/plugin.json` and `plugin/.mcp.copilot.json` (when present) — tool count or MCP exposure
 
-**When adding REST endpoints, you MUST update:**
+**When adding REST endpoints, update:**
 1. `src/triggers/api.ts` — endpoint registration
-2. `src/index.ts` — endpoint count in the log line
-3. `README.md` — endpoint count (search for "REST endpoints" and "endpoints on port")
 
-**When bumping version, you MUST update ALL of the following:**
-1. `package.json` — version field
-2. `src/version.ts` — VERSION constant and type union
-3. `src/types.ts` — ExportData version union
-4. `src/functions/export-import.ts` — supportedVersions set
-5. `test/export-import.test.ts` — version assertion
-6. `plugin/.claude-plugin/plugin.json` — version field
-7. `plugin/plugin.json` (when present) — version field
+**When bumping version, change only `package.json`.** `npm run docs:sync` carries the new version into `src/version.ts`, the `src/types.ts` ExportData union, the `supportedVersions` set in `src/functions/export-import.ts`, every plugin and package manifest that shared the old version, the deploy templates, the AGENTS.md stats heading, and CHANGELOG.md (the Unreleased section becomes the new version with today's date, plus its compare link).
 
 **When adding new KV scopes:**
 1. `src/state/schema.ts` — add to the KV object
@@ -111,7 +101,7 @@ Hook scripts in `src/hooks/` are standalone Node.js scripts (no iii-sdk import).
 
 ## Testing
 
-- All tests must pass before PR: `npm test` (1,596+ tests)
+- All tests must pass before PR: `npm test` (1,700+ tests)
 - Mock pattern: `vi.mock("iii-sdk")` with mock `sdk.trigger`, `kv.get/set/list`
 - Test files go in `test/` with `.test.ts` extension
 - Follow existing patterns in `test/crystallize.test.ts` for function tests
@@ -122,5 +112,5 @@ Hook scripts in `src/hooks/` are standalone Node.js scripts (no iii-sdk import).
 - 135 REST endpoints
 - 6 MCP resources, 3 MCP prompts
 - 12 hooks, 17 skills
-- 260+ iii functions
-- 1,596+ tests
+- 288+ iii functions
+- 1,700+ tests

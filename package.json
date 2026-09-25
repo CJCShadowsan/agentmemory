@@ -27,6 +27,8 @@
     "test:all": "vitest run",
     "skills:gen": "tsx scripts/skills/generate.ts",
     "skills:check": "tsx scripts/skills/generate.ts --check && tsx scripts/skills/check.ts",
+    "docs:sync": "tsx scripts/docs-sync.ts",
+    "docs:check": "tsx scripts/docs-sync.ts --check",
     "bench:load": "node --import tsx benchmark/load-100k.ts",
     "eval:longmemeval": "tsx eval/runner/longmemeval.ts",
     "eval:coding-life": "tsx eval/runner/coding-life.ts"
