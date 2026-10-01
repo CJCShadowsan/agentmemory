@@ -78,6 +78,12 @@ export interface StatusInputs {
   indexPersistence?: IndexPersistenceStatus | null;
   stateStore?: { ok: boolean; latencyMs?: number } | null;
   capture?: CaptureStatus | null;
+  observeDedup?: ObserveDedupStatus | null;
+}
+
+export interface ObserveDedupStatus {
+  skippedSinceStart: number;
+  windowSeconds: number;
 }
 
 export interface IndexBreakdown {
@@ -110,6 +116,7 @@ export interface StatusReport {
   graph: (GraphStatsInput & { ageSeconds: number | null; extractionEnabled: boolean }) | null;
   graphCompaction: GraphCompactBootStatus | null;
   capture: CaptureStatus | null;
+  observeDedup: ObserveDedupStatus | null;
   functions: Array<FunctionMetricInput & { failureRate: number; offWithoutLlm: boolean }>;
   flags: Array<StatusFlag & { inactiveReason?: string }>;
   problems: StatusProblem[];
@@ -208,12 +215,21 @@ function secondsBetween(later: Date, earlierIso: string | undefined): number | n
   return Math.max(0, Math.round((later.getTime() - earlier) / 1000));
 }
 
+function describeBackfillState(state: VectorBackfillState): string {
+  if (state === "waiting-for-opt-in") return "paused, waiting for opt-in";
+  if (state === "paused") return "paused, retried on the next start";
+  return state;
+}
+
 function vectorBackfillFix(state: VectorBackfillState | undefined): string {
   if (state === "waiting-for-opt-in") {
     return "Backfill is paused. Set AGENTMEMORY_VECTOR_BACKFILL=all and restart to opt in. This calls the embedding provider and is capped per boot by AGENTMEMORY_VECTOR_BACKFILL_MAX.";
   }
   if (state === "running") {
-    return "Backfill is running in the background, capped per boot by AGENTMEMORY_VECTOR_BACKFILL_MAX. Check the server log for embedding provider errors if progress stops.";
+    return "Backfill is running in the background in batches of AGENTMEMORY_VECTOR_BACKFILL_MAX with a short pause between batches. If agentmemory stops first, it continues on the next start. Check the server log for embedding provider errors if progress stops.";
+  }
+  if (state === "paused") {
+    return "Backfill stopped because the embedding provider did not return vectors. Search still works by keyword. Check the embedding provider key and the server log; the remaining documents are retried on the next start.";
   }
   return "Backfill is not running. Check the server log and embedding provider configuration. A full backfill requires AGENTMEMORY_VECTOR_BACKFILL=all and a restart, and can consume embedding provider tokens.";
 }
@@ -351,6 +367,14 @@ export function evaluateStatus(input: StatusInputs): StatusReport {
       });
     }
   }
+  if (persistence?.pendingLogError) {
+    problems.push({
+      level: "warn",
+      code: "index-pending-log-failing",
+      message: `New vectors could not be written to the pending vector log: ${persistence.pendingLogError}. They are still kept by the next index save, but a crash before then means they are embedded again at the next start.`,
+      fix: "Check the server log for the failing state write. Each new vector retries the log write.",
+    });
+  }
   if (persistence?.vectorCountShortfall) {
     const { expected, loaded } = persistence.vectorCountShortfall;
     problems.push({
@@ -468,6 +492,7 @@ export function evaluateStatus(input: StatusInputs): StatusReport {
     graph,
     graphCompaction: compaction,
     capture: input.capture ?? null,
+    observeDedup: input.observeDedup ?? null,
     functions,
     flags: input.flags.map((flag) =>
       flag.enabled && flag.needsLlm && noLlm
@@ -615,6 +640,9 @@ function legSummary(report: StatusReport, leg: IndexLegStatus): string {
   return leg.dirtySince ? `${saved}, unsaved changes pending` : saved;
 }
 
+const PENDING_LOG_EXPLAINER =
+  "Every new or removed vector is also written right away to this small log. After a crash or force-kill it is replayed at start, so vectors are not lost and nothing is embedded twice. Each index save empties it.";
+
 function indexPersistenceRows(report: StatusReport): string {
   const persistence = report.indexPersistence;
   if (!persistence) return "";
@@ -625,6 +653,13 @@ function indexPersistenceRows(report: StatusReport): string {
       "Vector storage",
       escapeHtml(`${plural(persistence.buckets, "bucket")}, ${plural(persistence.pendingChanges, "unsaved change")}`),
     );
+    if (persistence.pendingLog !== undefined) {
+      rows += row(
+        "Pending vector log",
+        escapeHtml(plural(persistence.pendingLog, "vector change")) +
+          `<p class="note">${escapeHtml(PENDING_LOG_EXPLAINER)}</p>`,
+      );
+    }
   }
   return rows;
 }
@@ -790,11 +825,12 @@ ${row("Missing from index", escapeHtml(idx.missingObservations ?? "not checked")
 ${row("Sessions", escapeHtml(idx.sessions ?? "unknown"))}
 ${row("Keyword index rebuild", idx.bm25Incomplete ? '<span class="warn">incomplete</span>' : "complete")}
 ${row("Pending vector backfill", escapeHtml(idx.pendingVectorBackfill))}
-${idx.vectorBackfillState ? row("Vector backfill", escapeHtml(idx.vectorBackfillState === "waiting-for-opt-in" ? "paused, waiting for opt-in" : idx.vectorBackfillState)) : ""}
+${idx.vectorBackfillState ? row("Vector backfill", escapeHtml(describeBackfillState(idx.vectorBackfillState))) : ""}
 ${indexPersistenceRows(report)}
 </table>
 <h2>Capture</h2><table>
 ${captureRows(report)}
+${report.observeDedup ? row("Repeats skipped", escapeHtml(`${report.observeDedup.skippedSinceStart} since start`) + `<p class="note">${escapeHtml(`A tool call with the same input and the same output as one stored in the last ${formatDuration(report.observeDedup.windowSeconds)} is skipped when the hook sends no event id.`)}</p>`) : ""}
 </table>
 <h2>Knowledge graph</h2><table>
 ${graph
