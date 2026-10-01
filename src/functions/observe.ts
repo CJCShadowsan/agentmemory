@@ -66,10 +66,12 @@ export function registerObserveFunction(
         };
       }
 
-      const obsId = generateId("obs");
+      const durable =
+        typeof payload.observationId === "string" && /^obs_[A-Za-z0-9_]{8,80}$/.test(payload.observationId);
+      const obsId = durable ? payload.observationId! : generateId("obs");
 
       let dedupHash: string | undefined;
-      if (dedupMap) {
+      if (dedupMap && typeof payload.eventId !== "string") {
         const dataIsObject =
           typeof payload.data === "object" && payload.data !== null;
         const d = dataIsObject
@@ -116,6 +118,7 @@ export function registerObserveFunction(
           channel: originChannel,
           capturedAt: payload.timestamp,
         },
+        ...(typeof payload.eventId === "string" ? { eventId: payload.eventId } : {}),
       };
 
       let extractedImage: string | undefined;
@@ -151,6 +154,9 @@ export function registerObserveFunction(
 
       return withKeyedLock(`obs:${payload.sessionId}`, async () => {
         const existing = await kv.list<CompressedObservation>(KV.observations(payload.sessionId));
+        if (durable && existing.some((o) => o?.id === obsId)) {
+          return { observationId: obsId, deduplicated: true, existing: true };
+        }
         if (maxObservationsPerSession && maxObservationsPerSession > 0) {
           if (existing.length >= maxObservationsPerSession) {
             return {

@@ -66,6 +66,7 @@ export interface RawObservation {
   imageData?: string;
   agentId?: string;
   origin?: Origin;
+  eventId?: string;
 }
 
 export interface ObservationSource {
@@ -177,6 +178,8 @@ export interface HookPayload {
   cwd: string;
   timestamp: string;
   data: unknown;
+  eventId?: string;
+  observationId?: string;
 }
 
 export interface ProviderConfig {

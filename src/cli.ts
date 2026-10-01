@@ -92,6 +92,7 @@ import { knownAgents } from "./cli/connect/index.js";
 const ALL_TOOLS_COUNT = getAllTools().length;
 const CORE_TOOLS_COUNT = getAllTools().filter((t) => ESSENTIAL_TOOLS.has(t.name)).length;
 import { resolveDataDir } from "./cli-data-dir.js";
+import { runCaptureCommand } from "./cli/capture.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -222,6 +223,9 @@ Commands:
                      the engine was started natively but state file is missing).
   mcp                Start standalone MCP shim — opt-in surface for MCP-only clients
                      (Cursor, Gemini CLI, etc). REST always available at :3111.
+  capture [--drain]  Show capture health: the local offline spool and the server
+                     inbox (pending, retrying, dead letters). --drain sends
+                     spooled observations now. --json for machine output.
   import-jsonl [p]   Import Claude Code JSONL transcripts (default: ~/.claude/projects)
                      --max-files <N> | --max-files=<N>: override scan cap (default 200, max 1000;
                      out-of-range is rejected; for trees >1000 files, batch by subdirectory)
@@ -274,7 +278,7 @@ if (toolsIdx !== -1 && args[toolsIdx + 1]) {
   process.env["AGENTMEMORY_TOOLS"] = toolsMode;
 }
 
-const URL_CLIENT_COMMANDS = new Set(["status", "doctor", "mcp"]);
+const URL_CLIENT_COMMANDS = new Set(["status", "doctor", "mcp", "capture"]);
 let hasExplicitLocalPortOverride = false;
 let selectedInstance = 0;
 
@@ -4075,6 +4079,15 @@ async function runConsole(): Promise<void> {
   process.exit(code);
 }
 
+async function runCapture(): Promise<void> {
+  const code = await runCaptureCommand({
+    base: getBaseUrl(),
+    args: args.slice(1),
+    secret: process.env["AGENTMEMORY_SECRET"],
+  });
+  process.exit(code);
+}
+
 const commands: Record<string, () => Promise<void>> = {
   init: runInit,
   connect: runConnectCmd,
@@ -4087,6 +4100,7 @@ const commands: Record<string, () => Promise<void>> = {
   remove: runRemove,
   mcp: runMcp,
   "import-jsonl": runImportJsonl,
+  capture: runCapture,
 };
 
 const first = args[0] ?? "";

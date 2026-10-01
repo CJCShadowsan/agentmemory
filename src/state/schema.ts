@@ -77,6 +77,8 @@ export const KV = {
   recentSearches: "mem:recent-searches",
   projectSessionsIndex: "mem:idx:project-sessions",
   obsSessionIndex: (shard: number) => `mem:idx:obs:${shard}`,
+  captureInbox: "mem:capture:inbox",
+  captureEvents: (shard: string) => `mem:capture:events:${shard}`,
 } as const;
 
 export const STREAM = {

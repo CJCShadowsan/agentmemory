@@ -33,6 +33,7 @@ import { IndexPersistence } from "./state/index-persistence.js";
 import { SHUTDOWN_FLUSH_TIMEOUT_MS, SHUTDOWN_HARD_EXIT_MS, settleWithin } from "./shutdown.js";
 import { registerPrivacyFunction } from "./functions/privacy.js";
 import { registerObserveFunction } from "./functions/observe.js";
+import { registerCaptureFunctions } from "./functions/capture.js";
 import { seedViewerStreamTracker } from "./state/viewer-stream.js";
 import { registerImageQuotaCleanup } from "./functions/image-quota-cleanup.js";
 import { registerVisionSearchFunctions } from "./functions/vision-search.js";
@@ -257,6 +258,7 @@ async function main() {
 
   registerPrivacyFunction(sdk);
   registerObserveFunction(sdk, kv, dedupMap, config.maxObservationsPerSession);
+  const capture = registerCaptureFunctions(sdk, kv, { restPort: config.restPort });
   registerImageQuotaCleanup(sdk, kv);
   registerVisionSearchFunctions(sdk, kv, imageEmbeddingProvider);
   if (isSlotsEnabled()) {
@@ -549,11 +551,31 @@ async function main() {
     `Ready. ${embeddingProvider ? "Triple-stream (BM25+Vector+Graph)" : "BM25+Graph"} search active.`,
   );
   bootLog(
-    `REST API: 135 endpoints at http://localhost:${config.restPort}/agentmemory/*`,
+    `REST API: 138 endpoints at http://localhost:${config.restPort}/agentmemory/*`,
   );
   bootLog(
     `MCP surface (opt-in via \`npx @agentmemory/mcp\`): ${getAllTools().length} tools · 6 resources · 3 prompts`,
   );
+
+  void (async () => {
+    try {
+      const drained = await capture.drainLocalSpool();
+      const delivered = drained.reduce((n, r) => n + r.delivered, 0);
+      const duplicates = drained.reduce((n, r) => n + r.duplicates, 0);
+      const remaining = drained.reduce((n, r) => n + r.remaining, 0);
+      if (delivered + duplicates + remaining > 0) {
+        bootLog(`Capture spool: ${delivered} recovered, ${duplicates} already stored, ${remaining} still waiting`);
+      }
+      const swept = await capture.sweep();
+      if (swept.processed > 0) {
+        bootLog(`Capture inbox: ${swept.recovered} of ${swept.processed} unfinished observations stored after restart`);
+      }
+      await capture.prune();
+    } catch (err) {
+      bootWarn(`Capture recovery at boot failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    capture.start();
+  })();
 
   const viewerServer = startViewerServer(
     config.viewerPort,
@@ -670,6 +692,7 @@ async function main() {
     hardExit.unref();
     healthMonitor.stop();
     dedupMap.stop();
+    capture.stop();
     indexPersistence.stop();
     const viewerClosed = new Promise<void>((resolve) =>
       viewerServer.close(() => resolve()),
