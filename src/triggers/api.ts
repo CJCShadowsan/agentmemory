@@ -1,4 +1,5 @@
 import { InvocationError, TriggerAction, type IIIClient } from "iii-sdk";
+import { DEDUP_WINDOW_MS, getDedupSkippedCount } from "../functions/dedup.js";
 import type { HttpRequest } from "@iii-dev/helpers/http";
 import { randomBytes } from "node:crypto";
 import type { Session, CompressedObservation, HookPayload, CommitLink, SessionSummary, HealthSnapshot, AuditQueryResult, AuditMigrationState } from "../types.js";
@@ -426,6 +427,7 @@ export function createStatusReporter(sdk: IIIClient, kv: StateKV, deps: StatusRe
       indexPersistence: getIndexPersistenceStatus(),
       stateStore,
       capture: capture ?? null,
+      observeDedup: { skippedSinceStart: getDedupSkippedCount(), windowSeconds: Math.round(DEDUP_WINDOW_MS / 1000) },
     });
   };
 }

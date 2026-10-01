@@ -8,7 +8,7 @@ import { trackViewerStreamItem, pruneViewerStreamIfDue } from "../state/viewer-s
 import { addSessionToProjectIndex } from "../state/session-index.js";
 import { indexObservationSession } from "../state/obs-index.js";
 import { stripPrivateData } from "./privacy.js";
-import { DedupMap } from "./dedup.js";
+import { DedupMap, recordDedupSkip } from "./dedup.js";
 import { withKeyedLock } from "../state/keyed-mutex.js";
 import { isAutoCompressEnabled } from "../config.js";
 import { buildSyntheticCompression } from "./compress-synthetic.js";
@@ -86,12 +86,18 @@ export function registerObserveFunction(
             : dataIsObject
               ? d
               : payload.data;
+        const dedupOutput =
+          d["tool_input"] !== undefined
+            ? d["tool_response"] ?? d["tool_output"] ?? d["output"] ?? d["error"]
+            : undefined;
         dedupHash = dedupMap.computeHash(
           payload.sessionId,
           toolName,
           dedupInput,
+          dedupOutput,
         );
         if (dedupMap.isDuplicate(dedupHash)) {
+          recordDedupSkip();
           return { deduplicated: true, sessionId: payload.sessionId };
         }
       }
