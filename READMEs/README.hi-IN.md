@@ -50,7 +50,7 @@
   <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-tools.svg"><img src="../assets/tags/stat-tools.svg" alt="54 MCP tools" height="38" /></picture>
   <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-hooks.svg"><img src="../assets/tags/stat-hooks.svg" alt="12 auto hooks" height="38" /></picture>
   <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-deps.svg"><img src="../assets/tags/stat-deps.svg" alt="0 external DBs" height="38" /></picture>
-  <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-tests.svg"><img src="../assets/tags/stat-tests.svg" alt="1,700+ tests passing" height="38" /></picture>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-tests.svg"><img src="../assets/tags/stat-tests.svg" alt="2,200+ tests passing" height="38" /></picture>
 </p>
 
 <p align="center">
@@ -1209,7 +1209,7 @@ Full registry: [workers.iii.dev](https://workers.iii.dev)। वहाँ हर
 | Prometheus / Grafana | iii OTEL + health monitor |
 | Custom plugin systems | `iii worker add <name>` |
 
-**192 source files · ~44,000 LOC · 1,700+ tests · 288 functions · 53 KV scopes**, सब कुछ तीन primitives पर। कोई `agentmemory plugin install` नहीं। Plugin system iii स्वयं है।
+**209 source files · ~50,000 LOC · 2,200+ tests · 304 functions · 56 KV scopes**, सब कुछ तीन primitives पर। कोई `agentmemory plugin install` नहीं। Plugin system iii स्वयं है।
 
 ---
 
@@ -1508,7 +1508,7 @@ CONSOLIDATION_ENABLED=true
 
 <h2 id="api"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/section-api.svg"><img src="../assets/tags/section-api.svg" alt="API" height="32" /></picture></h2>
 
-Port `3111` पर 131 endpoints। REST API default रूप से `127.0.0.1` से bind होता है। `AGENTMEMORY_SECRET` set होने पर protected endpoints `Authorization: Bearer <secret>` की आवश्यकता रखते हैं, और mesh sync endpoints दोनों peers पर `AGENTMEMORY_SECRET` की आवश्यकता रखते हैं।
+Port `3111` पर 135 endpoints। REST API default रूप से `127.0.0.1` से bind होता है। `AGENTMEMORY_SECRET` set होने पर protected endpoints `Authorization: Bearer <secret>` की आवश्यकता रखते हैं, और mesh sync endpoints दोनों peers पर `AGENTMEMORY_SECRET` की आवश्यकता रखते हैं।
 
 <details>
 <summary>मुख्य endpoints</summary>
@@ -1542,7 +1542,7 @@ Full endpoint list: [`src/triggers/api.ts`](../src/triggers/api.ts)
 ```bash
 npm run dev               # Hot reload
 npm run build             # Production build
-npm test                  # 1,700+ tests
+npm test                  # 2,200+ tests
 npm run test:integration  # API tests (running services की आवश्यकता है)
 ```
 

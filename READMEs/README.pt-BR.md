@@ -50,7 +50,7 @@
   <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-tools.svg"><img src="../assets/tags/stat-tools.svg" alt="54 MCP tools" height="38" /></picture>
   <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-hooks.svg"><img src="../assets/tags/stat-hooks.svg" alt="12 auto hooks" height="38" /></picture>
   <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-deps.svg"><img src="../assets/tags/stat-deps.svg" alt="0 external DBs" height="38" /></picture>
-  <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-tests.svg"><img src="../assets/tags/stat-tests.svg" alt="1,700+ tests passing" height="38" /></picture>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/stat-tests.svg"><img src="../assets/tags/stat-tests.svg" alt="2,200+ tests passing" height="38" /></picture>
 </p>
 
 <p align="center">
@@ -1220,7 +1220,7 @@ Registry completo: [workers.iii.dev](https://workers.iii.dev). Todo worker lá s
 | Prometheus / Grafana | iii OTEL + monitor de saúde |
 | Sistemas de plugin customizados | `iii worker add <name>` |
 
-**192 arquivos de código · ~44.000 LOC · 1.700+ tests · 288 funções · 53 escopos KV**, tudo em cima de três primitivos. Sem `agentmemory plugin install`. O sistema de plugins é o próprio iii.
+**209 arquivos de código · ~50.000 LOC · 2.200+ tests · 304 funções · 56 escopos KV**, tudo em cima de três primitivos. Sem `agentmemory plugin install`. O sistema de plugins é o próprio iii.
 
 ---
 
@@ -1519,7 +1519,7 @@ Crie `~/.agentmemory/.env`:
 
 <h2 id="api"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/tags/light/section-api.svg"><img src="../assets/tags/section-api.svg" alt="API" height="32" /></picture></h2>
 
-131 endpoints na porta `3111`. A REST API faz bind em `127.0.0.1` por padrão. Endpoints protegidos exigem `Authorization: Bearer <secret>` quando `AGENTMEMORY_SECRET` está definido, e endpoints de mesh sync exigem `AGENTMEMORY_SECRET` em ambos os peers.
+135 endpoints na porta `3111`. A REST API faz bind em `127.0.0.1` por padrão. Endpoints protegidos exigem `Authorization: Bearer <secret>` quando `AGENTMEMORY_SECRET` está definido, e endpoints de mesh sync exigem `AGENTMEMORY_SECRET` em ambos os peers.
 
 <details>
 <summary>Endpoints principais</summary>
@@ -1553,7 +1553,7 @@ Lista completa de endpoints: [`src/triggers/api.ts`](../src/triggers/api.ts)
 ```bash
 npm run dev               # Hot reload
 npm run build             # Production build
-npm test                  # 1,700+ tests
+npm test                  # 2,200+ tests
 npm run test:integration  # API tests (requires running services)
 ```
 

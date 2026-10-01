@@ -101,16 +101,16 @@ Hook scripts in `src/hooks/` are standalone Node.js scripts (no iii-sdk import).
 
 ## Testing
 
-- Before every commit run, in order: `npm run build`, `npm run skills:gen`, `npm run docs:sync`, `npm run skills:check`, `npm test` (1,700+ tests). Commit anything the generators changed. CI runs the same build, skills check and tests.
+- Before every commit run, in order: `npm run build`, `npm run skills:gen`, `npm run docs:sync`, `npm run skills:check`, `npm test` (2,200+ tests). Commit anything the generators changed. CI runs the same build, skills check and tests.
 - Mock pattern: `vi.mock("iii-sdk")` with mock `sdk.trigger`, `kv.get/set/list`
 - Test files go in `test/` with `.test.ts` extension
 - Follow existing patterns in `test/crystallize.test.ts` for function tests
 
-## Current Stats (v0.9.29)
+## Current Stats (v0.10.0)
 
 - 54 MCP tools (8 visible by default, `AGENTMEMORY_TOOLS=all` for all)
 - 135 REST endpoints
 - 6 MCP resources, 3 MCP prompts
 - 12 hooks, 17 skills
-- 288+ iii functions
-- 1,700+ tests
+- 304+ iii functions
+- 2,200+ tests
