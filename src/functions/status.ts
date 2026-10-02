@@ -78,6 +78,12 @@ export interface StatusInputs {
   indexPersistence?: IndexPersistenceStatus | null;
   stateStore?: { ok: boolean; latencyMs?: number } | null;
   capture?: CaptureStatus | null;
+  observeDedup?: ObserveDedupStatus | null;
+}
+
+export interface ObserveDedupStatus {
+  skippedSinceStart: number;
+  windowSeconds: number;
 }
 
 export interface IndexBreakdown {
@@ -110,6 +116,7 @@ export interface StatusReport {
   graph: (GraphStatsInput & { ageSeconds: number | null; extractionEnabled: boolean }) | null;
   graphCompaction: GraphCompactBootStatus | null;
   capture: CaptureStatus | null;
+  observeDedup: ObserveDedupStatus | null;
   functions: Array<FunctionMetricInput & { failureRate: number; offWithoutLlm: boolean }>;
   flags: Array<StatusFlag & { inactiveReason?: string }>;
   problems: StatusProblem[];
@@ -468,6 +475,7 @@ export function evaluateStatus(input: StatusInputs): StatusReport {
     graph,
     graphCompaction: compaction,
     capture: input.capture ?? null,
+    observeDedup: input.observeDedup ?? null,
     functions,
     flags: input.flags.map((flag) =>
       flag.enabled && flag.needsLlm && noLlm
@@ -797,6 +805,7 @@ ${indexPersistenceRows(report)}
 </table>
 <h2>Capture</h2><table>
 ${captureRows(report)}
+${report.observeDedup ? row("Repeats skipped", escapeHtml(`${report.observeDedup.skippedSinceStart} since start`) + `<p class="note">${escapeHtml(`A tool call with the same input and the same output as one stored in the last ${formatDuration(report.observeDedup.windowSeconds)} is skipped when the hook sends no event id.`)}</p>`) : ""}
 </table>
 <h2>Knowledge graph</h2><table>
 ${graph
