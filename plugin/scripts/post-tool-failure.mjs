@@ -596,7 +596,6 @@ function retainSent(url, eventId, body, mark, options = {}) {
 			const fd = openSync(file, "a", 384);
 			try {
 				writeSync(fd, line);
-				fsyncSync(fd);
 			} finally {
 				closeSync(fd);
 			}

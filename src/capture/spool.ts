@@ -458,7 +458,6 @@ export function retainSent(
       const fd = openSync(file, "a", 0o600);
       try {
         writeSync(fd, line);
-        fsyncSync(fd);
       } finally {
         closeSync(fd);
       }
