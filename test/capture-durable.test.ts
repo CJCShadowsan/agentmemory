@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockKV, mockSdk } from "./helpers/mocks.js";
@@ -22,7 +22,7 @@ function payload(marker: string, sessionId = "ses_capture") {
   };
 }
 
-async function boot(kv: Kv, options: { restPort?: number } = {}) {
+async function boot(kv: Kv, options: { restPort?: number; durableAfterMs?: number } = {}) {
   const { registerObserveFunction } = await import("../src/functions/observe.js");
   const { registerCaptureFunctions } = await import("../src/functions/capture.js");
   const { DedupMap } = await import("../src/functions/dedup.js");
@@ -337,5 +337,59 @@ describe("capture status problems", () => {
     expect(codes).toEqual(expect.arrayContaining(["capture-dead-letters", "capture-retrying", "capture-spool-waiting", "capture-spool-dropped"]));
     expect(report.capture?.inbox?.dead).toBe(1);
     expect(report.problems.find((p) => p.code === "capture-dead-letters")!.fix).toContain("http://localhost:4811/agentmemory/capture/retry");
+  });
+});
+
+describe("acceptance durability across a restart", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function sentRecords(dir: string): Array<{ eventId: string; bootId?: string }> {
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => f.includes(".sent-"))
+      .flatMap((f) => readFileSync(join(dir, f), "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l)));
+  }
+
+  it("tells clients its boot id and save window on every accepted response", async () => {
+    const kv = mockKV();
+    const { controller } = await boot(kv, { restPort: 4812, durableAfterMs: 3500 });
+    const mark = controller.durability();
+    expect(mark.bootId).toMatch(/^[0-9a-f]{24}$/);
+    expect(mark.durableAfterMs).toBe(3500);
+    const { captureResponseBody } = await import("../src/triggers/api.js");
+    const body = captureResponseBody({ status: "accepted", state: "completed", eventId: "e", observationId: "o", attempts: 1 }, mark);
+    expect(body).toMatchObject({ bootId: mark.bootId, durableAfterMs: 3500 });
+    expect(typeof body["acceptedAt"]).toBe("string");
+    expect(captureResponseBody({ status: "rejected", eventId: "e", error: "x", retryable: true }, mark)["bootId"]).toBeUndefined();
+    const second = await boot(mockKV(), { restPort: 4812, durableAfterMs: 3500 });
+    expect(second.controller.durability().bootId).not.toBe(mark.bootId);
+  });
+
+  it("uses the engine save interval plus a margin for the file store and a short fixed window for redis", async () => {
+    const { captureDurableAfterMs } = await import("../src/cli/engine-config.js");
+    expect(captureDurableAfterMs("file", ["save_interval_ms: 2000"])).toBe(3500);
+    expect(captureDurableAfterMs("file", [])).toBe(6500);
+    expect(captureDurableAfterMs("redis", ["save_interval_ms: 2000"])).toBe(1500);
+  });
+
+  it("re-sends observations a client kept from the previous boot and keeps them under the new boot", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "am-cap-")), "capture-spool");
+    vi.stubEnv("AGENTMEMORY_CAPTURE_SPOOL_DIR", dir);
+    const { retainSent } = await import("../src/capture/spool.js");
+    retainSent("http://127.0.0.1:4813", "evc_lostinflush01", payload("lost-in-flush"), { bootId: "cccccccccccccccccccccccc", durableAfterMs: 3500 }, { dir });
+    const kv = mockKV();
+    const { controller } = await boot(kv, { restPort: 4813, durableAfterMs: 3500 });
+    const results = await controller.drainLocalSpool();
+    expect(results[0]).toMatchObject({ claimed: 1, delivered: 1, remaining: 0 });
+    expect(observations(kv)).toHaveLength(1);
+    const kept = sentRecords(dir);
+    expect(kept.map((r) => r.eventId)).toEqual(["evc_lostinflush01"]);
+    expect(kept[0]!.bootId).toBe(controller.durability().bootId);
+    expect((await controller.status()).spool[0]).toMatchObject({ records: 0, retained: 1 });
   });
 });

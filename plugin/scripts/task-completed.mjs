@@ -2,7 +2,7 @@
 import { execSync, spawn } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, platform } from "node:os";
 //#region src/hooks/_project.ts
 function resolveProject(cwd) {
@@ -211,6 +211,10 @@ const DRAIN_LOCK_STALE_MS = 12e4;
 const ORPHAN_CLAIM_MS = 12e4;
 const LOCK_WAIT_MS = 500;
 const IMAGE_PLACEHOLDER = "[image dropped from capture spool]";
+const BOOT_ID_RE = /^[A-Za-z0-9]{8,64}$/;
+const SENT_FILE_RE = /^([A-Za-z0-9]{8,64})-(\d+)\.jsonl$/;
+const SENT_BUCKET_MS = 1e3;
+const MAX_DURABLE_AFTER_MS = 10 * 6e4;
 function emptyStats() {
 	return {
 		spooled: 0,
@@ -446,7 +450,9 @@ function appendSpool(url, eventId, body, reason, options = {}) {
 		return withLock(paths.lock, () => {
 			let expired = 0;
 			if (fileSize(paths.file) + bytes > policy.maxBytes) expired = pruneExpiredLocked(paths, policy);
-			if (fileSize(paths.file) + bytes > policy.maxBytes) {
+			const over = fileSize(paths.file) + sentBytes(paths) + bytes - policy.maxBytes;
+			if (over > 0) evictSent(paths, over);
+			if (fileSize(paths.file) + sentBytes(paths) + bytes > policy.maxBytes) {
 				if (expired) writeStats(paths, (s) => void (s.expired += expired));
 				return note("full", bytes);
 			}
@@ -471,6 +477,123 @@ function appendSpool(url, eventId, body, reason, options = {}) {
 			dropped: "error"
 		};
 	}
+}
+function listSent(paths) {
+	const segments = [];
+	let entries;
+	try {
+		entries = readdirSync(paths.dir);
+	} catch {
+		return segments;
+	}
+	const prefix = `${paths.name}.sent-`;
+	for (const entry of entries) {
+		if (!entry.startsWith(prefix)) continue;
+		const match = entry.slice(prefix.length).match(SENT_FILE_RE);
+		if (!match) continue;
+		const file = join(paths.dir, entry);
+		segments.push({
+			file,
+			bootId: match[1],
+			dueAt: Number(match[2]),
+			bytes: fileSize(file)
+		});
+	}
+	return segments;
+}
+function sentBytes(paths) {
+	return listSent(paths).reduce((n, s) => n + s.bytes, 0);
+}
+function evictSent(paths, need) {
+	let freed = 0;
+	for (const seg of listSent(paths).sort((a, b) => a.dueAt - b.dueAt)) {
+		if (freed >= need) return;
+		try {
+			unlinkSync(seg.file);
+			freed += seg.bytes;
+		} catch {}
+	}
+}
+function parseSentMark(body) {
+	if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+	const bootId = body["bootId"];
+	const after = body["durableAfterMs"];
+	if (typeof bootId !== "string" || !BOOT_ID_RE.test(bootId)) return null;
+	if (typeof after !== "number" || !Number.isFinite(after) || after < 0) return null;
+	return {
+		bootId,
+		durableAfterMs: Math.min(Math.ceil(after), MAX_DURABLE_AFTER_MS)
+	};
+}
+function retainSent(url, eventId, body, mark, options = {}) {
+	const policy = options.policy ?? spoolPolicy();
+	if (!policy.enabled || !BOOT_ID_RE.test(mark.bootId)) return false;
+	const paths = spoolPaths(url, options.dir);
+	const now = options.now ?? Date.now();
+	try {
+		ensureDir(paths.dir);
+		const record = {
+			v: 1,
+			eventId,
+			spooledAt: new Date(now).toISOString(),
+			reason: "sent",
+			attempts: 0,
+			body: sanitizeBody(body),
+			bootId: mark.bootId
+		};
+		let line = JSON.stringify(record) + "\n";
+		if (Buffer.byteLength(line) > policy.maxRecordBytes) {
+			record.body = withoutImage(record.body);
+			line = JSON.stringify(record) + "\n";
+		}
+		const bytes = Buffer.byteLength(line);
+		if (bytes > policy.maxRecordBytes) return false;
+		const dueAt = Math.ceil((now + mark.durableAfterMs) / SENT_BUCKET_MS) * SENT_BUCKET_MS;
+		const file = join(paths.dir, `${paths.name}.sent-${mark.bootId}-${dueAt}.jsonl`);
+		return withLock(paths.lock, () => {
+			if (fileSize(paths.file) + sentBytes(paths) + bytes > policy.maxBytes) return false;
+			const fd = openSync(file, "a", 384);
+			try {
+				writeSync(fd, line);
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
+			}
+			return true;
+		});
+	} catch {
+		return false;
+	}
+}
+function reconcileSent(url, bootId, options = {}) {
+	const result = {
+		released: 0,
+		requeued: 0
+	};
+	if (!(options.policy ?? spoolPolicy()).enabled) return result;
+	const paths = spoolPaths(url, options.dir);
+	const now = options.now ?? Date.now();
+	for (const seg of listSent(paths)) {
+		if (seg.bootId === bootId) {
+			if (seg.dueAt > now) continue;
+			try {
+				unlinkSync(seg.file);
+				result.released++;
+			} catch {}
+			continue;
+		}
+		const target = join(paths.dir, `${paths.name}.draining-${process.pid}-${now}-${result.requeued}.jsonl`);
+		try {
+			renameSync(seg.file, target);
+		} catch {
+			continue;
+		}
+		try {
+			utimesSync(target, 0, 0);
+		} catch {}
+		result.requeued++;
+	}
+	return result;
 }
 function claimFiles(paths) {
 	const claimed = [];
@@ -641,8 +764,28 @@ async function post(body, timeoutMs) {
 		body: JSON.stringify(body),
 		signal: AbortSignal.timeout(timeoutMs)
 	});
-	await res.arrayBuffer().catch(() => void 0);
-	return classify(res.status);
+	const text = await res.text().catch(() => "");
+	const outcome = classify(res.status);
+	if (outcome !== "delivered" && outcome !== "duplicate") return {
+		outcome,
+		mark: null
+	};
+	try {
+		return {
+			outcome,
+			mark: parseSentMark(JSON.parse(text))
+		};
+	} catch {
+		return {
+			outcome,
+			mark: null
+		};
+	}
+}
+function keepUntilDurable(eventId, body, mark) {
+	const { requeued } = reconcileSent(REST_URL, mark.bootId);
+	retainSent(REST_URL, eventId, body, mark);
+	return requeued;
 }
 function startDrainChild() {
 	if (process.env[DRAIN_CHILD_ENV] === "1") return;
@@ -669,9 +812,9 @@ async function captureObservation(body, timeoutMs) {
 	};
 	let reason;
 	try {
-		const outcome = await post(payload, timeoutMs);
+		const { outcome, mark } = await post(payload, timeoutMs);
 		if (outcome !== "retry") {
-			if (spoolHasRecords(REST_URL)) startDrainChild();
+			if ((mark ? keepUntilDurable(eventId, payload, mark) : 0) > 0 || spoolHasRecords(REST_URL)) startDrainChild();
 			return outcome;
 		}
 		reason = "server-error";
@@ -685,10 +828,14 @@ function isDrainChild() {
 	return process.env[DRAIN_CHILD_ENV] === "1";
 }
 async function runDrainChild() {
-	await drainSpool(REST_URL, (record) => post({
-		...record.body,
-		eventId: record.eventId
-	}, DRAIN_REQUEST_TIMEOUT_MS), {
+	await drainSpool(REST_URL, async (record) => {
+		const { outcome, mark } = await post({
+			...record.body,
+			eventId: record.eventId
+		}, DRAIN_REQUEST_TIMEOUT_MS);
+		if (mark) retainSent(REST_URL, record.eventId, record.body, mark);
+		return outcome;
+	}, {
 		maxRecords: DRAIN_MAX_RECORDS,
 		deadlineMs: DRAIN_DEADLINE_MS
 	}).catch(() => void 0);

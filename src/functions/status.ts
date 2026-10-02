@@ -668,7 +668,9 @@ export function describeCaptureSpool(capture: CaptureStatus): string {
   const records = capture.spool.reduce((n, s) => n + s.records, 0);
   const bytes = capture.spool.reduce((n, s) => n + s.bytes, 0);
   if (!capture.spool.some((s) => s.enabled)) return "off (AGENTMEMORY_CAPTURE_SPOOL=false)";
-  return records === 0 ? "empty" : `${plural(records, "observation")} waiting, ${Math.ceil(bytes / 1024)} KiB`;
+  const retained = capture.spool.reduce((n, s) => n + (s.retained ?? 0), 0);
+  const held = retained > 0 ? `, ${retained} sent and kept until saved` : "";
+  return records === 0 ? `empty${held}` : `${plural(records, "observation")} waiting, ${Math.ceil(bytes / 1024)} KiB${held}`;
 }
 
 function captureRows(report: StatusReport): string {
@@ -688,7 +690,7 @@ function captureRows(report: StatusReport): string {
   rows += row(
     "Local spool",
     escapeHtml(describeCaptureSpool(capture)) +
-      `<p class="note">Hooks write here only when the server is unreachable. ${escapeHtml(capture.spool.map((s) => s.path).join(", "))}</p>`,
+      `<p class="note">Hooks write here when the server is unreachable, and keep each accepted observation here until the server has saved it to disk. ${escapeHtml(capture.spool.map((s) => s.path).join(", "))}</p>`,
   );
   const drained = capture.spool.map((s) => s.stats.lastDrainAt).filter(Boolean).sort().pop();
   if (drained) rows += row("Last spool drain", escapeHtml(`${formatDuration(secondsBetween(new Date(report.checkedAt), drained))} ago`));

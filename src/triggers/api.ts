@@ -157,9 +157,13 @@ export function captureStatusCode(result: CaptureResult): number {
   return result.retryable ? 503 : 422;
 }
 
-export function captureResponseBody(result: CaptureResult): Record<string, unknown> {
+export function captureResponseBody(
+  result: CaptureResult,
+  durability?: { bootId: string; durableAfterMs: number } | null,
+): Record<string, unknown> {
   if (result.status === "rejected") return { ...result, success: false };
-  return { ...result };
+  if (!durability) return { ...result };
+  return { ...result, bootId: durability.bootId, acceptedAt: new Date().toISOString(), durableAfterMs: durability.durableAfterMs };
 }
 
 function asNonEmptyString(value: unknown): string | null {
@@ -667,7 +671,10 @@ export function registerApiTriggers(
         function_id: "mem::capture",
         payload: { payload, eventId },
       });
-      return { status_code: captureStatusCode(result), body: captureResponseBody(result) };
+      return {
+        status_code: captureStatusCode(result),
+        body: captureResponseBody(result, getCaptureController()?.durability() ?? null),
+      };
     },
   );
 

@@ -1,19 +1,27 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { IIIClient } from "iii-sdk";
 import type { HookPayload } from "../types.js";
 import { KV, generateId } from "../state/schema.js";
 import type { StateKV } from "../state/kv.js";
 import { withKeyedLock } from "../state/keyed-mutex.js";
-import { getEnvVar } from "../config.js";
+import { getEnvVar, getStateBackend } from "../config.js";
 import { logger } from "../logger.js";
 import { isValidEventId } from "../capture/event-id.js";
+import { runtimeConfigPath } from "../cli/engine-launch.js";
+import { captureDurableAfterMs, engineStateConfigPaths } from "../cli/engine-config.js";
 import {
   drainSpool,
+  reconcileSent,
+  retainSent,
   spoolDir,
   spoolPolicy,
   spoolSummary,
   type DrainResult,
   type SendOutcome,
+  type SentMark,
   type SpoolRecord,
   type SpoolSummary,
 } from "../capture/spool.js";
@@ -153,6 +161,23 @@ function splitTarget(target: string): { url: string; dir: string } {
   return { url: target.slice(0, at), dir: target.slice(at + 1) };
 }
 
+export function serverDurableAfterMs(): number {
+  let backend: "file" | "redis" = "file";
+  try {
+    backend = getStateBackend();
+  } catch {}
+  const configTexts: string[] = [];
+  const dataDir = getEnvVar("AGENTMEMORY_DATA_DIR");
+  if (dataDir) {
+    for (const path of engineStateConfigPaths(join(homedir(), ".agentmemory"), runtimeConfigPath(dataDir))) {
+      try {
+        configTexts.push(readFileSync(path, "utf-8"));
+      } catch {}
+    }
+  }
+  return captureDurableAfterMs(backend, configTexts);
+}
+
 let activeController: CaptureController | null = null;
 
 export function getCaptureController(): CaptureController | null {
@@ -164,6 +189,7 @@ export interface CaptureController {
   prune(): Promise<number>;
   drainLocalSpool(): Promise<DrainResult[]>;
   status(): Promise<CaptureStatus>;
+  durability(): SentMark;
   start(): void;
   stop(): void;
 }
@@ -171,9 +197,13 @@ export interface CaptureController {
 export function registerCaptureFunctions(
   sdk: IIIClient,
   kv: StateKV,
-  options: { restPort?: number } = {},
+  options: { restPort?: number; durableAfterMs?: number } = {},
 ): CaptureController {
   const policy = capturePolicy();
+  const mark: SentMark = {
+    bootId: randomBytes(12).toString("hex"),
+    durableAfterMs: options.durableAfterMs ?? serverDurableAfterMs(),
+  };
   const counters: CaptureStatus["sinceStart"] = {
     accepted: 0,
     completed: 0,
@@ -382,20 +412,37 @@ export function registerCaptureFunctions(
     return removed;
   }
 
-  async function drainLocalSpool(): Promise<DrainResult[]> {
-    const results: DrainResult[] = [];
-    const send = async (record: SpoolRecord): Promise<SendOutcome> => {
+  function spoolSender(url: string, dir: string) {
+    return async (record: SpoolRecord): Promise<SendOutcome> => {
       const body = record.body as Record<string, unknown>;
       const payload = spoolPayload(body);
       if (!payload) return "rejected";
       const outcome = await capture({ payload, eventId: record.eventId });
-      if (outcome.status === "duplicate") return "duplicate";
-      if (outcome.status === "accepted") return "delivered";
-      return outcome.retryable ? "retry" : "rejected";
+      if (outcome.status === "rejected") return outcome.retryable ? "retry" : "rejected";
+      retainSent(url, record.eventId, body, mark, { dir });
+      return outcome.status === "duplicate" ? "duplicate" : "delivered";
     };
+  }
+
+  async function settleRetained(): Promise<number> {
+    let requeued = 0;
     for (const target of spoolTargets) {
       const { url, dir } = splitTarget(target);
-      results.push(await drainSpool(url, send, { dir, policy: spoolPolicy() }));
+      const settled = reconcileSent(url, mark.bootId, { dir });
+      if (settled.requeued > 0) {
+        await drainSpool(url, spoolSender(url, dir), { dir, policy: spoolPolicy() });
+        requeued += settled.requeued;
+      }
+    }
+    return requeued;
+  }
+
+  async function drainLocalSpool(): Promise<DrainResult[]> {
+    const results: DrainResult[] = [];
+    for (const target of spoolTargets) {
+      const { url, dir } = splitTarget(target);
+      reconcileSent(url, mark.bootId, { dir });
+      results.push(await drainSpool(url, spoolSender(url, dir), { dir, policy: spoolPolicy() }));
     }
     const total = results.reduce<DrainResult>(
       (acc, r) => ({
@@ -491,10 +538,12 @@ export function registerCaptureFunctions(
     prune,
     drainLocalSpool,
     status,
+    durability: () => ({ ...mark }),
     start() {
       if (timers.length) return;
       const sweepTimer = setInterval(() => {
         void sweep().catch(() => {});
+        void settleRetained().catch(() => {});
       }, policy.retryIntervalMs);
       sweepTimer.unref();
       const pruneTimer = setInterval(() => {
