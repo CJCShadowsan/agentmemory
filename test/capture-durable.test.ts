@@ -122,6 +122,45 @@ describe("durable capture", () => {
     expect(observations(kv)).toHaveLength(1);
   });
 
+  it("restores a lost vector when a re-sent event finds its observation already stored", async () => {
+    const kv = mockKV();
+    const { capture } = await boot(kv);
+    const search = await import("../src/functions/search.js");
+    const { VectorIndex } = await import("../src/state/vector-index.js");
+    const vectors = new VectorIndex();
+    const embed = vi.fn(async () => new Float32Array([1, 0, 0]));
+    search.setVectorIndex(vectors);
+    search.setEmbeddingProvider({ name: "test", dimensions: 3, embed, embedBatch: async (t: string[]) => t.map(() => new Float32Array([1, 0, 0])) } as never);
+    try {
+      const body = payload("lost-vector");
+      const first = await capture(body, "evc_000000000023");
+      const id = first.observationId as string;
+      expect(vectors.has(id)).toBe(true);
+      vectors.remove(id);
+      search.getSearchIndex().remove(id);
+      for (const [scope, entries] of kv.store) {
+        if (scope.startsWith("mem:capture:events:")) entries.clear();
+      }
+      const resent = await capture(body, "evc_000000000023");
+      expect(resent).toMatchObject({ status: "accepted", observationId: id });
+      expect(vectors.has(id)).toBe(true);
+      expect(vectors.size).toBe(1);
+      expect(search.getSearchIndex().has(id)).toBe(true);
+      expect(embed).toHaveBeenCalledTimes(2);
+      await capture(body, "evc_000000000023");
+      expect(embed).toHaveBeenCalledTimes(2);
+      vectors.remove(id);
+      const duplicate = await capture(body, "evc_000000000023");
+      expect(duplicate).toMatchObject({ status: "duplicate", observationId: id });
+      expect(vectors.has(id)).toBe(true);
+      expect(embed).toHaveBeenCalledTimes(3);
+      expect(observations(kv)).toHaveLength(1);
+    } finally {
+      search.setVectorIndex(null);
+      search.setEmbeddingProvider(null);
+    }
+  });
+
   it("derives the observation id from the event key and its timestamp", async () => {
     const { observationIdFor } = await import("../src/functions/capture.js");
     const key = "cap_0123456789abcdef0123456789abcdef01234567";

@@ -3,13 +3,14 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { IIIClient } from "iii-sdk";
-import type { HookPayload } from "../types.js";
+import type { CompressedObservation, HookPayload } from "../types.js";
 import { KV, generateId } from "../state/schema.js";
 import type { StateKV } from "../state/kv.js";
 import { withKeyedLock } from "../state/keyed-mutex.js";
 import { getEnvVar, getStateBackend } from "../config.js";
 import { logger } from "../logger.js";
 import { isValidEventId } from "../capture/event-id.js";
+import { restoreIndexEntries } from "./observe.js";
 import { runtimeConfigPath } from "../cli/engine-launch.js";
 import { captureDurableAfterMs, engineStateConfigPaths } from "../cli/engine-config.js";
 import {
@@ -249,11 +250,12 @@ export function registerCaptureFunctions(
     counters.completed++;
   }
 
-  async function observationSaved(done: CompletedEvent): Promise<boolean> {
+  async function storedObservation(done: CompletedEvent): Promise<CompressedObservation | null | undefined> {
+    if (!done.observationId) return undefined;
     try {
-      return (await kv.get(KV.observations(done.sessionId), done.observationId)) != null;
+      return (await kv.get<CompressedObservation>(KV.observations(done.sessionId), done.observationId)) ?? null;
     } catch {
-      return true;
+      return undefined;
     }
   }
 
@@ -313,7 +315,9 @@ export function registerCaptureFunctions(
       if (clientEventId) {
         const done = await kv.get<CompletedEvent>(eventScope(key), key);
         if (done) {
-          if (!done.observationId || (await observationSaved(done))) {
+          const stored = await storedObservation(done);
+          if (stored !== null) {
+            if (stored) await restoreIndexEntries(stored).catch(() => {});
             counters.duplicates++;
             return { status: "duplicate", state: "completed", eventId, observationId: done.observationId, deduplicated: true };
           }

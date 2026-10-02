@@ -12,7 +12,7 @@ import { DedupMap, recordDedupSkip } from "./dedup.js";
 import { withKeyedLock } from "../state/keyed-mutex.js";
 import { isAutoCompressEnabled } from "../config.js";
 import { buildSyntheticCompression } from "./compress-synthetic.js";
-import { getSearchIndex, scheduleIndexSave, vectorIndexAddGuarded } from "./search.js";
+import { getSearchIndex, getVectorIndex, scheduleIndexSave, vectorIndexAddGuarded } from "./search.js";
 import { getAgentId } from "../config.js";
 import { logger } from "../logger.js";
 import { saveImageToDisk } from "../utils/image-store.js";
@@ -40,6 +40,22 @@ export function extractImage(d: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+export async function restoreIndexEntries(obs: CompressedObservation): Promise<void> {
+  if (typeof obs.title !== "string" || !obs.sessionId) return;
+  const search = getSearchIndex();
+  if (!search.has(obs.id)) {
+    search.add(obs);
+    scheduleIndexSave();
+  }
+  const vectors = getVectorIndex();
+  if (vectors && !vectors.has(obs.id)) {
+    await vectorIndexAddGuarded(obs.id, obs.sessionId, obs.title + " " + (obs.narrative || ""), {
+      kind: "synthetic",
+      logId: obs.id,
+    });
+  }
 }
 
 export function registerObserveFunction(
@@ -160,7 +176,9 @@ export function registerObserveFunction(
 
       return withKeyedLock(`obs:${payload.sessionId}`, async () => {
         const existing = await kv.list<CompressedObservation>(KV.observations(payload.sessionId));
-        if (durable && existing.some((o) => o?.id === obsId)) {
+        const stored = durable ? existing.find((o) => o?.id === obsId) : undefined;
+        if (stored) {
+          await restoreIndexEntries(stored);
           return { observationId: obsId, deduplicated: true, existing: true };
         }
         if (maxObservationsPerSession && maxObservationsPerSession > 0) {
