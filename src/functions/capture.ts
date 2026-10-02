@@ -11,6 +11,7 @@ import { getEnvVar, getStateBackend } from "../config.js";
 import { logger } from "../logger.js";
 import { isValidEventId } from "../capture/event-id.js";
 import { restoreIndexEntries } from "./observe.js";
+import { scrubRecord } from "./privacy.js";
 import { runtimeConfigPath } from "../cli/engine-launch.js";
 import { captureDurableAfterMs, engineStateConfigPaths } from "../cli/engine-config.js";
 import {
@@ -351,7 +352,7 @@ export function registerCaptureFunctions(
         attempts: 0,
         acceptedAt: new Date(acceptedAt).toISOString(),
         updatedAt: new Date(acceptedAt).toISOString(),
-        payload: cleanPayload,
+        payload: { ...cleanPayload, data: scrubRecord(cleanPayload.data) },
       };
       await kv.set(KV.captureInbox, key, rec);
       if (inboxSize !== null) inboxSize++;

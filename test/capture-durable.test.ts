@@ -161,6 +161,20 @@ describe("durable capture", () => {
     }
   });
 
+  it("scrubs credentials before an event waits in the inbox", async () => {
+    const kv = mockKV();
+    const { sdk, capture } = await boot(kv);
+    sdk.fns.set("mem::observe", async () => {
+      throw new Error("state write timed out");
+    });
+    const body = payload("scrub");
+    body.data.tool_output = "cloned https://deploy:hunter2secret@git.example.com/repo.git";
+    await capture(body, "evc_000000000024");
+    const stored = JSON.stringify(inbox(kv));
+    expect(stored).not.toContain("hunter2secret");
+    expect(stored).toContain("[REDACTED_SECRET]");
+  });
+
   it("derives the observation id from the event key and its timestamp", async () => {
     const { observationIdFor } = await import("../src/functions/capture.js");
     const key = "cap_0123456789abcdef0123456789abcdef01234567";
