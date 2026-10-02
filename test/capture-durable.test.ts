@@ -94,6 +94,43 @@ describe("durable capture", () => {
     expect(observations(kv)).toHaveLength(1);
   });
 
+  it("reuses the observation id when the event record was lost in a crash", async () => {
+    const kv = mockKV();
+    const { capture } = await boot(kv);
+    const body = payload("lost-event-record");
+    const first = await capture(body, "evc_000000000021");
+    for (const [scope, entries] of kv.store) {
+      if (scope.startsWith("mem:capture:events:")) entries.clear();
+    }
+    const resent = await capture(body, "evc_000000000021");
+    expect(resent).toMatchObject({ status: "accepted", state: "completed", observationId: first.observationId });
+    expect(observations(kv)).toHaveLength(1);
+    expect(observations(kv)[0]!.id).toBe(first.observationId);
+  });
+
+  it("stores the observation again when the event record survived a crash but the observation did not", async () => {
+    const kv = mockKV();
+    const { capture } = await boot(kv);
+    const body = payload("lost-observation");
+    const first = await capture(body, "evc_000000000022");
+    kv.store.get(KV.observations("ses_capture"))!.clear();
+    const resent = await capture(body, "evc_000000000022");
+    expect(resent).toMatchObject({ status: "accepted", state: "completed", observationId: first.observationId });
+    expect(observations(kv).map((o) => o.id)).toEqual([first.observationId]);
+    const again = await capture(body, "evc_000000000022");
+    expect(again).toMatchObject({ status: "duplicate", observationId: first.observationId });
+    expect(observations(kv)).toHaveLength(1);
+  });
+
+  it("derives the observation id from the event key and its timestamp", async () => {
+    const { observationIdFor } = await import("../src/functions/capture.js");
+    const key = "cap_0123456789abcdef0123456789abcdef01234567";
+    const at = "2026-10-02T06:58:06.512Z";
+    expect(observationIdFor(key, at, 1)).toBe(observationIdFor(key, at, 2));
+    expect(observationIdFor(key, at, 1)).toBe(`obs_${Date.parse(at).toString(36)}_0123456789ab`);
+    expect(observationIdFor(key, "not a time", Date.UTC(2026, 0, 1))).toBe(`obs_${Date.UTC(2026, 0, 1).toString(36)}_0123456789ab`);
+  });
+
   it("scopes event ids by project and session", async () => {
     const kv = mockKV();
     const { capture } = await boot(kv);

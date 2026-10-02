@@ -134,8 +134,13 @@ function eventScope(key: string): string {
   return KV.captureEvents(captureEventShard(key));
 }
 
-function observationIdFor(key: string, acceptedAt: number): string {
-  return `obs_${acceptedAt.toString(36)}_${key.slice(4, 16)}`;
+const MIN_ID_TIME = Date.UTC(2020, 0, 1);
+const MAX_ID_TIME = Date.UTC(2100, 0, 1);
+
+export function observationIdFor(key: string, timestamp: string | undefined, acceptedAt: number): string {
+  const at = typeof timestamp === "string" ? Date.parse(timestamp) : NaN;
+  const stamp = Number.isFinite(at) && at >= MIN_ID_TIME && at < MAX_ID_TIME ? at : acceptedAt;
+  return `obs_${stamp.toString(36)}_${key.slice(4, 16)}`;
 }
 
 function backoffMs(attempts: number, policy: CapturePolicy): number {
@@ -244,6 +249,14 @@ export function registerCaptureFunctions(
     counters.completed++;
   }
 
+  async function observationSaved(done: CompletedEvent): Promise<boolean> {
+    try {
+      return (await kv.get(KV.observations(done.sessionId), done.observationId)) != null;
+    } catch {
+      return true;
+    }
+  }
+
   async function attempt(rec: InboxRecord): Promise<CaptureResult> {
     rec.attempts++;
     type ObserveResult = { observationId?: string; deduplicated?: boolean; success?: boolean; error?: string };
@@ -296,11 +309,19 @@ export function registerCaptureFunctions(
     const eventId = clientEventId ?? generateId("evs");
     const key = captureKey(payload.project, payload.sessionId, eventId);
     return withKeyedLock(`capture:${key}`, async () => {
+      let storedObservationId: string | undefined;
       if (clientEventId) {
         const done = await kv.get<CompletedEvent>(eventScope(key), key);
         if (done) {
-          counters.duplicates++;
-          return { status: "duplicate", state: "completed", eventId, observationId: done.observationId, deduplicated: true };
+          if (!done.observationId || (await observationSaved(done))) {
+            counters.duplicates++;
+            return { status: "duplicate", state: "completed", eventId, observationId: done.observationId, deduplicated: true };
+          }
+          storedObservationId = done.observationId;
+          logger.warn("capture event was marked stored but its observation is missing, storing it again", {
+            eventId,
+            observationId: done.observationId,
+          });
         }
       }
       const queued = await kv.get<InboxRecord>(KV.captureInbox, key);
@@ -321,7 +342,7 @@ export function registerCaptureFunctions(
         sessionId: payload.sessionId,
         project: payload.project,
         hookType: payload.hookType,
-        observationId: observationIdFor(key, acceptedAt),
+        observationId: storedObservationId ?? observationIdFor(key, payload.timestamp, acceptedAt),
         status: "pending",
         attempts: 0,
         acceptedAt: new Date(acceptedAt).toISOString(),
