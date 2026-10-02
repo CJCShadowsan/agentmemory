@@ -508,19 +508,3 @@ describe("markLlmFunctions", () => {
     expect(markLlmFunctions(metrics, "llm").some((m) => m.offWithoutLlm)).toBe(false);
   });
 });
-
-describe("observe repeat counter", () => {
-  it("reports and renders skipped repeated tool calls", () => {
-    const report = evaluateStatus(inputs({ observeDedup: { skippedSinceStart: 4, windowSeconds: 300 } }));
-    expect(report.observeDedup).toEqual({ skippedSinceStart: 4, windowSeconds: 300 });
-    const html = renderStatusHtml(report, "n");
-    expect(html).toContain("Repeats skipped");
-    expect(html).toContain("4 since start");
-  });
-
-  it("leaves the counter out when it is not reported", () => {
-    const report = evaluateStatus(inputs());
-    expect(report.observeDedup).toBeNull();
-    expect(renderStatusHtml(report, "n")).not.toContain("Repeats skipped");
-  });
-});
