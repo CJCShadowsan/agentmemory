@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { resolveClientSecret } from "../secret-store.js";
 import { deriveEventId } from "../capture/event-id.js";
 import {
   appendSpool,
@@ -14,7 +15,7 @@ import {
 } from "../capture/spool.js";
 
 export const REST_URL = process.env["AGENTMEMORY_URL"] || "http://localhost:3111";
-const SECRET = process.env["AGENTMEMORY_SECRET"] || "";
+const SECRET = resolveClientSecret(REST_URL);
 const DRAIN_CHILD_ENV = "AGENTMEMORY_CAPTURE_DRAIN_CHILD";
 const DRAIN_MAX_RECORDS = 500;
 const DRAIN_DEADLINE_MS = 20_000;
