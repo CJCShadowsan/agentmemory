@@ -508,32 +508,3 @@ describe("markLlmFunctions", () => {
     expect(markLlmFunctions(metrics, "llm").some((m) => m.offWithoutLlm)).toBe(false);
   });
 });
-
-describe("vector durability rows", () => {
-  it("shows the pending vector log, a paused backlog and skipped repeats in plain language", () => {
-    const report = evaluateStatus(
-      inputs({
-        index: { ...inputs().index, pendingVectorBackfill: 7, vectorBackfillState: "paused" },
-        indexPersistence: {
-          saveIntervalMs: 600000,
-          saving: false,
-          buckets: 2,
-          pendingChanges: 3,
-          vector: { lastSavedAt: "2026-09-24T11:59:00.000Z", dirtySince: null, lastError: null, lastErrorAt: null },
-          vectorCountShortfall: null,
-          pendingLog: 3,
-          pendingLogError: "state write timed out",
-        },
-        observeDedup: { skippedSinceStart: 4, windowSeconds: 300 },
-      }),
-    );
-    expect(codes(report)).toContain("index-pending-log-failing");
-    const backlog = report.problems.find((p) => p.code === "index-vector-backfill-pending");
-    expect(backlog?.fix).toContain("retried on the next start");
-    expect(report.observeDedup).toEqual({ skippedSinceStart: 4, windowSeconds: 300 });
-    const html = renderStatusHtml(report, "n");
-    expect(html).toContain("3 vector changes");
-    expect(html).toContain("paused, retried on the next start");
-    expect(html).toContain("4 since start");
-  });
-});

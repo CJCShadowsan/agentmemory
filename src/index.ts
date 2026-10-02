@@ -14,7 +14,6 @@ import {
   getConsolidationIntervalMs,
   isContextInjectionEnabled,
   isDropStaleIndexEnabled,
-  getVectorBackfillMax,
   getAuditRetentionMonths,
   getStateBackend,
   isSessionSweepEnabled,
@@ -44,8 +43,6 @@ import { registerCompressFunction } from "./functions/compress.js";
 import {
   registerSearchFunction,
   backfillVectors,
-  backfillVectorBacklog,
-  isBm25RebuildIncomplete,
   rebuildKeywordIndex,
   markKeywordRebuildPending,
   getSearchIndex,
@@ -517,37 +514,18 @@ async function main() {
     }
   }
 
-  if (vectorIndex && loaded && loaded.state !== "unavailable") {
-    const replay = await indexPersistence.replayPendingLog(embeddingProvider?.dimensions ?? 0);
-    if (replay.entries > 0) {
-      bootLog(
-        `Recovered ${replay.added} vectors and ${replay.removed} removals written after the last index save, without calling the embedding provider` +
-          (replay.skipped > 0 ? ` (${replay.skipped} entries skipped)` : ""),
-      );
-    }
-  }
-
   const auditMigration = startAuditMigration(kv).catch(() => {});
 
   const vectorCountShortfall =
     Boolean(loaded?.vector) &&
     loaded?.expectedCount !== undefined &&
     loaded.vector!.size < loaded.expectedCount;
-  let vectorBackfillSince =
+  const vectorBackfillSince =
     !loaded || loaded.state === "unavailable"
       ? undefined
       : loaded.state === "none" || vectorCountShortfall
         ? null
         : loaded.savedAt;
-  const incrementalBackfill = typeof vectorBackfillSince === "string" && Boolean(vectorIndex && embeddingProvider);
-  if (incrementalBackfill) {
-    const since = vectorBackfillSince as string;
-    const marker = await indexPersistence.readBackfillMarker();
-    if (marker !== null && Date.parse(marker) < Date.parse(since)) vectorBackfillSince = marker;
-    await indexPersistence.markBackfillSince(vectorBackfillSince as string).catch((err) => {
-      bootWarn(`Could not save the vector backfill marker: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  }
   const keywordStart = Date.now();
   try {
     const keyword = await rebuildKeywordIndex(kv, vectorBackfillSince);
@@ -562,31 +540,7 @@ async function main() {
           `(set AGENTMEMORY_VECTOR_BACKFILL=all to opt in). See /agentmemory/status.`,
       );
     }
-    const backlogScanComplete = !isBm25RebuildIncomplete();
-    if (incrementalBackfill && backlogScanComplete && keyword.vectorJobs.length === 0) {
-      await indexPersistence.clearBackfillMarker().catch(() => {});
-    }
-    if (incrementalBackfill && keyword.vectorJobs.length > 0) {
-      setVectorBackfillState("running");
-      bootLog(
-        `Re-embedding ${keyword.vectorJobs.length} vectors missing since the last index save, ${getVectorBackfillMax()} per batch in the background`,
-      );
-      void backfillVectorBacklog(keyword.vectorJobs)
-        .then(async (result) => {
-          if (result.complete && backlogScanComplete) await indexPersistence.clearBackfillMarker().catch(() => {});
-          setVectorBackfillState(result.complete ? "idle" : "paused");
-          if (result.added > 0) bootLog(`Vector index backfilled: ${result.added} entries`);
-          if (!result.complete) {
-            bootWarn(
-              `Vector backfill stopped with ${result.remaining} documents still missing a vector. They are retried on the next start.`,
-            );
-          }
-        })
-        .catch((err) => {
-          setVectorBackfillState("paused");
-          console.warn(`[agentmemory] Failed to backfill vectors:`, err);
-        });
-    } else if (keyword.vectorJobs.length > 0) {
+    if (keyword.vectorJobs.length > 0) {
       setVectorBackfillState("running");
       bootLog(`Backfilling ${keyword.vectorJobs.length} missing vectors in the background`);
       void backfillVectors(keyword.vectorJobs)
