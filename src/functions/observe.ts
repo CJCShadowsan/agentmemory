@@ -12,6 +12,7 @@ import { DedupMap, recordDedupSkip } from "./dedup.js";
 import { withKeyedLock } from "../state/keyed-mutex.js";
 import { isAutoCompressEnabled } from "../config.js";
 import { buildSyntheticCompression } from "./compress-synthetic.js";
+import { isCaptureKey } from "../capture/event-record.js";
 import { getSearchIndex, getVectorIndex, scheduleIndexSave, vectorIndexAddGuarded } from "./search.js";
 import { getAgentId } from "../config.js";
 import { logger } from "../logger.js";
@@ -141,6 +142,7 @@ export function registerObserveFunction(
           capturedAt: payload.timestamp,
         },
         ...(typeof payload.eventId === "string" ? { eventId: payload.eventId } : {}),
+        ...(isCaptureKey(payload.captureKey) ? { captureKey: payload.captureKey } : {}),
       };
 
       let extractedImage: string | undefined;

@@ -10,6 +10,12 @@ import { withKeyedLock } from "../state/keyed-mutex.js";
 import { getEnvVar, getStateBackend } from "../config.js";
 import { logger } from "../logger.js";
 import { isValidEventId } from "../capture/event-id.js";
+import {
+  EVENT_SHARD_CHARS,
+  EVENT_SHARDS,
+  captureEventScope as eventScope,
+  type CompletedEvent,
+} from "../capture/event-record.js";
 import { restoreIndexEntries } from "./observe.js";
 import { scrubRecord } from "./privacy.js";
 import { runtimeConfigPath } from "../cli/engine-launch.js";
@@ -48,16 +54,8 @@ export interface InboxRecord {
   payload: HookPayload;
 }
 
-export interface CompletedEvent {
-  key: string;
-  eventId: string;
-  sessionId: string;
-  project: string;
-  observationId: string;
-  acceptedAt: string;
-  completedAt: string;
-  attempts: number;
-}
+export type { CompletedEvent } from "../capture/event-record.js";
+export { captureEventShard } from "../capture/event-record.js";
 
 export type CaptureResult =
   | { status: "accepted"; state: "completed"; eventId: string; observationId: string; attempts: number }
@@ -100,8 +98,6 @@ export interface CaptureStatus {
   spool: SpoolSummary[];
 }
 
-const EVENT_SHARD_CHARS = 2;
-const EVENT_SHARDS = 16 ** EVENT_SHARD_CHARS;
 const MAX_BACKOFF_MS = 15 * 60_000;
 const ERROR_MAX_CHARS = 500;
 
@@ -126,14 +122,6 @@ export function capturePolicy(): CapturePolicy {
 export function captureKey(project: string, sessionId: string, eventId: string): string {
   const hash = createHash("sha256").update(`${project}\u0000${sessionId}\u0000${eventId}`).digest("hex");
   return `cap_${hash.slice(0, 40)}`;
-}
-
-export function captureEventShard(key: string): string {
-  return key.slice(4, 4 + EVENT_SHARD_CHARS);
-}
-
-function eventScope(key: string): string {
-  return KV.captureEvents(captureEventShard(key));
 }
 
 const MIN_ID_TIME = Date.UTC(2020, 0, 1);
@@ -270,7 +258,7 @@ export function registerCaptureFunctions(
         function_id: "mem::observe",
         payload: {
           ...rec.payload,
-          ...(rec.eventSource === "client" ? { eventId: rec.eventId } : {}),
+          ...(rec.eventSource === "client" ? { eventId: rec.eventId, captureKey: rec.key } : {}),
           observationId: rec.observationId,
         },
       })) as ObserveResult | null;
@@ -315,6 +303,10 @@ export function registerCaptureFunctions(
       let storedObservationId: string | undefined;
       if (clientEventId) {
         const done = await kv.get<CompletedEvent>(eventScope(key), key);
+        if (done?.state === "deleted") {
+          counters.duplicates++;
+          return { status: "duplicate", state: "completed", eventId, observationId: done.observationId, deduplicated: true };
+        }
         if (done) {
           const stored = await storedObservation(done);
           if (stored !== null) {
@@ -339,7 +331,7 @@ export function registerCaptureFunctions(
         return { status: "rejected", eventId, error: `capture inbox is full (${policy.inboxMax} unprocessed events)`, retryable: true };
       }
       const acceptedAt = Date.now();
-      const { eventId: _ignoredEventId, observationId: _ignoredObservationId, ...cleanPayload } = payload;
+      const { eventId: _ignoredEventId, observationId: _ignoredObservationId, captureKey: _ignoredCaptureKey, ...cleanPayload } = payload;
       const rec: InboxRecord = {
         key,
         eventId,
@@ -367,6 +359,12 @@ export function registerCaptureFunctions(
       if (!rec) return "gone";
       if (rec.status === "dead" && !force) return "waiting";
       if (!force && rec.status === "retrying" && rec.nextAttemptAt && Date.parse(rec.nextAttemptAt) > Date.now()) return "waiting";
+      if (rec.eventSource === "client" && (await kv.get<CompletedEvent>(eventScope(key), key))?.state === "deleted") {
+        await kv.delete(KV.captureInbox, key);
+        if (inboxSize !== null) inboxSize = Math.max(0, inboxSize - 1);
+        counters.duplicates++;
+        return "gone";
+      }
       if (force) rec.attempts = 0;
       const outcome = await attempt({ ...rec });
       if (outcome.status === "accepted" && outcome.state === "completed") return "recovered";
@@ -417,7 +415,7 @@ export function registerCaptureFunctions(
       const sorted = events.filter(Boolean).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
       for (let j = 0; j < sorted.length; j++) {
         const ev = sorted[j]!;
-        if (j >= perShard || Date.parse(ev.completedAt) < cutoff) {
+        if (j >= perShard || Date.parse(ev.deletedAt ?? ev.completedAt) < cutoff) {
           await kv.delete(scope, ev.key).catch(() => {});
           removed++;
         }
