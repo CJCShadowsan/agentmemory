@@ -62,6 +62,42 @@ verify against whichever file the engine actually loads. This branch patches the
 TypeScript source instead, so every bundle produced by `npm run build` carries
 it.
 
+## `patch/autonomous-distill` (continued): graph link retention
+
+Second commit on the same branch, fixing entity extraction so relationships
+survive.
+
+`parseGraphXml` resolved relationship endpoints with
+`nodes.find(n => n.name === ...)`, searching **only the entities the model
+emitted in that one response**. A relationship naming an entity the model
+referenced without re-emitting it was skipped, so the edge was never written
+and the target node stayed at degree 0 permanently — no later pass could
+recover it, because a later pass has the same limitation.
+
+Measured on this deployment before the fix:
+
+- 183 of 500 snapshot nodes had zero edges, each backed by 4+ observations
+- 39% of extraction runs produced no edges at all
+- 0.54 edges per node overall
+
+Endpoints now fall back to the persisted name index across node types, so a
+relationship between an already-known entity and a newly extracted one is
+kept. Endpoints that were never extracted still yield no edge, so this adds
+links without inventing them.
+
+Regression coverage: `test/graph-extract-cross-batch-links.test.ts` asserts a
+new entity links to one an earlier batch extracted, and that an entity which
+was never extracted still produces no edge.
+
+### Repairing already-stranded nodes
+
+The fix prevents further loss; it does not reconstruct edges already dropped.
+Recovery means re-running extraction over the observations that back the
+stranded nodes — currently 183 nodes over 956 distinct observations, about 39
+batches at 25 observations each via `POST /agentmemory/graph/build`. That is
+probabilistic rather than guaranteed (the model may not re-emit the same
+relationships) and costs a full pass of local-model inference.
+
 ## Keeping in sync with upstream
 
 ```bash
