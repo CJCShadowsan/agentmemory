@@ -3759,6 +3759,21 @@ export function registerApiTriggers(
   });
   sdk.registerTrigger({ type: "http", function_id: "api::crystallize", config: { api_path: "/agentmemory/crystals/create", http_method: "POST" } });
 
+  sdk.registerFunction("api::distill-graph-to-memory", async (req: HttpRequest) => {
+    const denied = checkAuth(req, secret);
+    if (denied) return denied;
+    try {
+      const result = await sdk.trigger({
+        function_id: "mem::distill-graph-to-memory",
+        payload: (req.body ?? {}) as Record<string, unknown>,
+      });
+      return { status_code: 200, body: result };
+    } catch (err) {
+      return { status_code: 500, body: { error: err instanceof Error ? err.message : String(err) } };
+    }
+  });
+  sdk.registerTrigger({ type: "http", function_id: "api::distill-graph-to-memory", config: { api_path: "/agentmemory/distill-graph-to-memory", http_method: "POST" } });
+
   sdk.registerFunction("api::crystal-list",  async (req: HttpRequest) => {
     const denied = checkAuth(req, secret);
     if (denied) return denied;

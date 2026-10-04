@@ -95,7 +95,7 @@ export function registerLessonsFunctions(sdk: IIIClient, kv: StateKV): void {
       confidence?: number;
       project?: string;
       tags?: string[];
-      source?: "crystal" | "manual" | "consolidation";
+      source?: "crystal" | "manual" | "consolidation" | "graph-distillation";
       sourceIds?: string[];
     }) => {
       if (!data.content?.trim()) {

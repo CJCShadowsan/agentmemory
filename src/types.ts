@@ -643,7 +643,8 @@ export interface AuditEntry {
     | "slot_reflect"
     | "graph_compact"
     | "audit_migrate"
-    | "session_sweep";
+    | "session_sweep"
+    | "distill";
   userId?: string;
   functionId: string;
   targetIds: string[];
@@ -859,7 +860,7 @@ export interface Lesson {
   context: string;
   confidence: number;
   reinforcements: number;
-  source: "crystal" | "manual" | "consolidation";
+  source: "crystal" | "manual" | "consolidation" | "graph-distillation";
   sourceIds: string[];
   project?: string;
   tags: string[];

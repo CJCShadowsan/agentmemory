@@ -23,7 +23,7 @@ interface ConceptCluster {
   crystalIds: string[];
 }
 
-function reinforceInsight(insight: Insight): void {
+export function reinforceInsight(insight: Insight): void {
   const now = new Date().toISOString();
   insight.reinforcements++;
   insight.confidence = Math.min(
