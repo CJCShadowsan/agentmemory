@@ -391,13 +391,22 @@ function parseAttrs(raw: string): Record<string, string> {
   return attrs;
 }
 
-function parseGraphXml(
+
+// Relationship endpoints arrive as bare names, so resolving one means probing
+// the name index across every node type to reach the stored row.
+const GRAPH_NODE_TYPES: GraphNode["type"][] = [
+  "file", "function", "concept", "error", "decision", "pattern",
+  "library", "person", "project", "preference", "location", "organization",
+  "event",
+];
+async function parseGraphXml(
   xml: string,
   observationIds: string[],
-): {
+  resolveStoredId: (name: string) => Promise<string | null>,
+): Promise<{
   nodes: GraphNode[];
   edges: GraphEdge[];
-} {
+}> {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const now = new Date().toISOString();
@@ -444,14 +453,22 @@ function parseGraphXml(
     const parsedWeight = parseFloat(attrs["weight"] ?? "");
     const weight = Number.isFinite(parsedWeight) ? parsedWeight : 0.5;
 
-    const sourceNode = nodes.find((n) => n.name === sourceName);
-    const targetNode = nodes.find((n) => n.name === targetName);
-    if (!sourceNode || !targetNode) continue;
+    // Prefer an entity this batch introduced, but fall back to the stored
+    // name index: an entity the model referenced without re-emitting is a
+    // cross-batch relationship, and dropping it is what strands nodes at
+    // degree 0 with no way to recover the link on a later pass.
+    const resolve = async (name: string): Promise<string | null> => {
+      const fresh = nodes.find((n) => n.name === name);
+      return fresh ? fresh.id : await resolveStoredId(name);
+    };
+    const sourceNodeId = await resolve(sourceName);
+    const targetNodeId = await resolve(targetName);
+    if (!sourceNodeId || !targetNodeId) continue;
     edges.push({
       id: generateId("ge"),
       type,
-      sourceNodeId: sourceNode.id,
-      targetNodeId: targetNode.id,
+      sourceNodeId,
+      targetNodeId,
       weight: Math.max(0, Math.min(1, weight)),
       sourceObservationIds: observationIds,
       createdAt: now,
@@ -848,7 +865,20 @@ export function registerGraphFunction(
             GRAPH_EXTRACTION_SYSTEM,
             prompt,
           );
-          const parsed = parseGraphXml(response, obsIds);
+          // Relationship endpoints are bare names, so an entity extracted in
+          // an earlier batch has to be resolvable here too — otherwise every
+          // cross-batch relationship is dropped and the referenced node is
+          // stranded with no edges.
+          const resolveStoredId = async (name: string): Promise<string | null> => {
+            for (const nodeType of GRAPH_NODE_TYPES) {
+              const id = await kv
+                .get<string>(KV.graphNameIndex, nameIndexKey(nodeType, name))
+                .catch(() => null);
+              if (id) return id;
+            }
+            return null;
+          };
+          const parsed = await parseGraphXml(response, obsIds, resolveStoredId);
           nodes = nodes.concat(parsed.nodes);
           edges = edges.concat(parsed.edges);
         } catch (err) {
