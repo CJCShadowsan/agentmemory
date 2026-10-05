@@ -870,6 +870,12 @@ export interface Lesson {
   lastDecayedAt?: string;
   decayRate: number;
   deleted?: boolean;
+  // Use tracking: how often and how recently this lesson was actually
+  // surfaced into a session's context. Reinforcement alone is not a use
+  // signal — a lesson is reinforced only when the same text is re-learned,
+  // which a working lesson never is — so decay needs its own baseline.
+  surfacedCount?: number;
+  lastSurfacedAt?: string;
 }
 
 export interface Insight {

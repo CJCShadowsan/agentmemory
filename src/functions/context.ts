@@ -15,6 +15,7 @@ import {
   getProjectSessionIndex,
 } from "../state/session-index.js";
 import { recordAccessBatch } from "./access-tracker.js";
+import { markLessonsSurfaced } from "./lessons.js";
 import { logger } from "../logger.js";
 import {
   isSlotsEnabled,
@@ -154,6 +155,9 @@ export function registerContextFunction(
           recency: mostRecent,
           sourceIds: relevantLessons.map((l) => l.id),
         });
+        // A lesson that is never surfaced cannot decay on use, only on age,
+        // so record the use here. Failures must not break context assembly.
+        void markLessonsSurfaced(kv, relevantLessons).catch(() => {});
       }
 
       const indexEntries = await getProjectSessionIndex(kv, data.project);

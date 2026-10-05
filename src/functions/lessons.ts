@@ -63,6 +63,42 @@ function reinforceLesson(lesson: Lesson): void {
   lesson.updatedAt = now;
 }
 
+// Surfacing the same lesson into many session contexts within one window is
+// one use, not many: without this floor every recall would rewrite the row.
+const USE_FLOOR_MS = 60 * 60 * 1000;
+
+/**
+ * Record that lessons were surfaced into a session's context.
+ *
+ * This is deliberately not `reinforceLesson`: reinforcement means the same
+ * lesson was re-learned, which raises confidence, and letting retrieval drive
+ * that would pin every popular lesson at 1.0. Use only moves the decay
+ * baseline, so a lesson in active service never decays and one nobody reads
+ * ages out.
+ */
+export async function markLessonsSurfaced(
+  kv: StateKV,
+  lessons: Lesson[],
+  now = new Date(),
+): Promise<number> {
+  const timestamp = now.toISOString();
+  const dirty: Lesson[] = [];
+  for (const lesson of lessons) {
+    const last = lesson.lastSurfacedAt
+      ? new Date(lesson.lastSurfacedAt).getTime()
+      : Number.NEGATIVE_INFINITY;
+    if (now.getTime() - last < USE_FLOOR_MS) continue;
+    lesson.surfacedCount = (lesson.surfacedCount ?? 0) + 1;
+    lesson.lastSurfacedAt = timestamp;
+    dirty.push(lesson);
+    lessonRecords.set(lesson.id, lesson);
+  }
+  if (dirty.length === 0) return 0;
+  await Promise.all(dirty.map((lesson) => kv.set(KV.lessons, lesson.id, lesson)));
+  noteLessonMutation();
+  return dirty.length;
+}
+
 export const LESSON_SOURCE_IDS_MAX = 50;
 const LESSON_SOURCE_ID_MAX_LENGTH = 200;
 
@@ -337,7 +373,14 @@ export function registerLessonsFunctions(sdk: IIIClient, kv: StateKV): void {
       for (const lesson of lessons) {
         if (lesson.deleted) continue;
 
-        const baseline = lesson.lastDecayedAt || lesson.lastReinforcedAt || lesson.createdAt;
+        // Anchor decay on the last time the lesson was actually used: one
+        // still in service never decays, and only a lesson that has fallen
+        // out of use ages out.
+        const baseline =
+          lesson.lastSurfacedAt ||
+          lesson.lastDecayedAt ||
+          lesson.lastReinforcedAt ||
+          lesson.createdAt;
         const weeksSinceBaseline =
           (now - new Date(baseline).getTime()) / (1000 * 60 * 60 * 24 * 7);
 
@@ -353,7 +396,14 @@ export function registerLessonsFunctions(sdk: IIIClient, kv: StateKV): void {
           lesson.lastDecayedAt = timestamp;
           lesson.updatedAt = timestamp;
 
-          if (lesson.confidence <= 0.1 && lesson.reinforcements === 0) {
+          // Reinforcement alone is not a use signal — a working lesson is
+          // never re-learned — so a lesson that has been surfaced is not
+          // soft-deleted just because its confidence floored out.
+          if (
+            lesson.confidence <= 0.1 &&
+            lesson.reinforcements === 0 &&
+            (lesson.surfacedCount ?? 0) === 0
+          ) {
             lesson.deleted = true;
             softDeleted++;
           } else {

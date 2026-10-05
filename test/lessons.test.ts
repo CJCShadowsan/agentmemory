@@ -4,7 +4,11 @@ vi.mock("../src/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { normalizeLessonSourceIds, registerLessonsFunctions } from "../src/functions/lessons.js";
+import {
+  markLessonsSurfaced,
+  normalizeLessonSourceIds,
+  registerLessonsFunctions,
+} from "../src/functions/lessons.js";
 import { currentAuditScope } from "./helpers/mocks.js";
 import type { Lesson } from "../src/types.js";
 
@@ -375,6 +379,110 @@ describe("Lessons", () => {
       const after = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
       expect(after!.confidence).toBeCloseTo(0.55, 2);
       expect(after!.confidence).toBeGreaterThan(0.4);
+    });
+
+    it("does not decay a lesson that is still in use", async () => {
+      const saved = (await sdk.trigger("mem::lesson-save", {
+        content: "Use the shared paramiko helper",
+        confidence: 0.8,
+      })) as { lesson: Lesson };
+
+      const lesson = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      // Old, but surfaced a day ago: age alone must not decay it.
+      lesson!.createdAt = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+      lesson!.lastSurfacedAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      lesson!.surfacedCount = 12;
+      await kv.set("mem:lessons", lesson!.id, lesson!);
+
+      const result = (await sdk.trigger("mem::lesson-decay-sweep", {})) as {
+        decayed: number;
+      };
+
+      expect(result.decayed).toBe(0);
+      const after = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      expect(after!.confidence).toBe(0.8);
+    });
+
+    it("does not soft-delete a used lesson when confidence floors out", async () => {
+      const saved = (await sdk.trigger("mem::lesson-save", {
+        content: "Used but low confidence",
+        confidence: 0.12,
+      })) as { lesson: Lesson };
+
+      const lesson = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      lesson!.createdAt = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString();
+      lesson!.lastSurfacedAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      lesson!.surfacedCount = 3;
+      await kv.set("mem:lessons", lesson!.id, lesson!);
+
+      const result = (await sdk.trigger("mem::lesson-decay-sweep", {})) as {
+        softDeleted: number;
+      };
+
+      expect(result.softDeleted).toBe(0);
+      const after = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      expect(after!.deleted).toBeFalsy();
+    });
+  });
+
+  describe("markLessonsSurfaced", () => {
+    it("records a use without inflating confidence", async () => {
+      const saved = (await sdk.trigger("mem::lesson-save", {
+        content: "Track my use",
+        confidence: 0.6,
+      })) as { lesson: Lesson };
+
+      const before = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      const touched = await markLessonsSurfaced(kv as never, [before!], new Date());
+
+      const after = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      expect(touched).toBe(1);
+      expect(after!.surfacedCount).toBe(1);
+      expect(after!.lastSurfacedAt).toBeDefined();
+      // Use is not reinforcement: confidence and the counter stay put.
+      expect(after!.confidence).toBe(0.6);
+      expect(after!.reinforcements).toBe(0);
+    });
+
+    it("collapses repeat surfacing inside the floor window into one use", async () => {
+      const saved = (await sdk.trigger("mem::lesson-save", {
+        content: "Recall this often",
+        confidence: 0.6,
+      })) as { lesson: Lesson };
+
+      const now = new Date();
+      const lesson = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      await markLessonsSurfaced(kv as never, [lesson!], now);
+
+      const again = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      const touched = await markLessonsSurfaced(
+        kv as never,
+        [again!],
+        new Date(now.getTime() + 60_000),
+      );
+
+      expect(touched).toBe(0);
+      const after = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      expect(after!.surfacedCount).toBe(1);
+    });
+
+    it("counts again once the floor window has passed", async () => {
+      const saved = (await sdk.trigger("mem::lesson-save", {
+        content: "Still in service",
+        confidence: 0.6,
+      })) as { lesson: Lesson };
+
+      const start = new Date();
+      const lesson = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      await markLessonsSurfaced(kv as never, [lesson!], start);
+
+      const later = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+      const again = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      const touched = await markLessonsSurfaced(kv as never, [again!], later);
+
+      expect(touched).toBe(1);
+      const after = await kv.get<Lesson>("mem:lessons", saved.lesson.id);
+      expect(after!.surfacedCount).toBe(2);
     });
   });
 
