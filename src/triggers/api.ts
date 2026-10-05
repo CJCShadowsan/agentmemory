@@ -3932,11 +3932,22 @@ export function registerApiTriggers(
         body: { error: "invalid numeric parameter: limit" },
       };
     }
+    const order = params.order;
+    if (
+      order !== undefined &&
+      !["confidence", "usage", "recent"].includes(String(order))
+    ) {
+      return {
+        status_code: 400,
+        body: { error: "order must be one of: confidence, usage, recent" },
+      };
+    }
     const result = await sdk.trigger({ function_id: "mem::lesson-list", payload: {
       project: params.project,
       source: params.source,
       minConfidence,
       limit,
+      order: order as "confidence" | "usage" | "recent" | undefined,
     } });
     return { status_code: 200, body: result };
   });

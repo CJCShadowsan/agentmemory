@@ -264,6 +264,58 @@ describe("Lessons", () => {
       const result = (await sdk.trigger("mem::lesson-list", { limit: 1 })) as { lessons: Lesson[] };
       expect(result.lessons.length).toBe(1);
     });
+
+    it("orders by real use, not confidence, when asked", async () => {
+      // Lesson B has the lowest confidence but is the one that keeps earning
+      // its place; that is exactly what usage ordering must surface.
+      const all = (await kv.list<Lesson>("mem:lessons")) as Lesson[];
+      const b = all.find((l) => l.content === "Lesson B")!;
+      const a = all.find((l) => l.content === "Lesson A")!;
+      await kv.set("mem:lessons", b.id, {
+        ...b,
+        surfacedCount: 9,
+        lastSurfacedAt: new Date().toISOString(),
+      });
+      await kv.set("mem:lessons", a.id, { ...a, surfacedCount: 1 });
+
+      const result = (await sdk.trigger("mem::lesson-list", {
+        order: "usage",
+      })) as { lessons: Lesson[] };
+
+      expect(result.lessons.map((l) => l.content)).toEqual([
+        "Lesson B",
+        "Lesson A",
+        "Lesson C",
+      ]);
+    });
+
+    it("keeps confidence ordering as the default", async () => {
+      const all = (await kv.list<Lesson>("mem:lessons")) as Lesson[];
+      const b = all.find((l) => l.content === "Lesson B")!;
+      await kv.set("mem:lessons", b.id, { ...b, surfacedCount: 9 });
+
+      const result = (await sdk.trigger("mem::lesson-list", {})) as {
+        lessons: Lesson[];
+      };
+
+      expect(result.lessons[0].content).toBe("Lesson A");
+    });
+
+    it("orders by most recently updated when asked", async () => {
+      const all = (await kv.list<Lesson>("mem:lessons")) as Lesson[];
+      const c = all.find((l) => l.content === "Lesson C")!;
+      await kv.set("mem:lessons", c.id, {
+        ...c,
+        // Clearly later than the other two, which are saved in the same tick.
+        updatedAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+
+      const result = (await sdk.trigger("mem::lesson-list", {
+        order: "recent",
+      })) as { lessons: Lesson[] };
+
+      expect(result.lessons[0].content).toBe("Lesson C");
+    });
   });
 
   describe("mem::lesson-strengthen", () => {

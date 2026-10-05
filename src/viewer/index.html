@@ -1623,7 +1623,8 @@
       strength: { term: 'Strength', text: 'How important a memory is, from 1 to 10. memory_save and the REST API store 7; consolidation rates each distilled memory itself. Stronger memories go first into the context agents get at session start, and bulk cleanup can target weak ones.' },
       importance: { term: 'Importance', text: 'A 1 to 10 score for how much an observation matters: 1 to 3 low (green), 4 to 6 medium (yellow), 7 to 10 high (red). With an LLM provider the compressor rates each observation; without one every observation gets the default 5. Session-start context uses observations rated 5 or higher, highest first, and old low-rated ones are evicted first.' },
       confidence: { term: 'Confidence', text: 'How battle-tested a lesson is, from 0 to 100%. New lessons start at 50% unless the saver sets it. Each use closes 10% of the gap to 100% (50% becomes 55%). A lesson not used for a week loses 5 points per week, down to 5%; one that falls to 10% without ever being used is dropped. Recall ranks higher-confidence lessons first.' },
-      reinforcements: { term: 'Uses', text: 'How many times the lesson was confirmed again: saved again with the same text by any agent, or strengthened with memory_lesson_strengthen. Each use raises confidence and restarts the decay clock.' },
+      usage: { term: 'Used', text: 'How many times this lesson was actually surfaced into a session context — the signal that it earns its place. Recall counts at most one use per hour so a busy session cannot inflate it. Use does not raise confidence; it restarts the decay clock, so a lesson in service is never aged out and only one that falls out of use decays. The Lessons tab sorts by this.' },
+      reinforcements: { term: 'Re-learned', text: 'How many times the lesson was confirmed again: saved again with the same text by any agent, or strengthened with memory_lesson_strengthen. A lesson that is working is never re-learned, so this stays near zero for anything useful — read Used for the number that matters.' },
       lessonSources: { term: 'Sources', text: 'The sessions, memories, observations or crystals a lesson was learned from. Crystal and import lessons record them automatically; pass sourceIds to POST /lessons to link a lesson you save by hand.' },
       auditTargets: { term: 'Targets', text: 'The records the change touched. Memory, session, observation, lesson, action, crystal and graph ids open that record; other ids can be copied.' },
       conventions: { term: 'Conventions', text: 'Rules agentmemory infers from the files and concepts above: TypeScript when .ts files outnumber .js, a src/ layout when most files sit under src/, tests when test or spec files appear, and any concept that came up 3 or more times.' },
@@ -1713,7 +1714,7 @@
     var ENTITY_ENDPOINTS = {
       memory: { path: 'memories?latest=true&limit=100&facets=true', key: 'memories' },
       session: { path: 'sessions?limit=100&facets=true', key: 'sessions' },
-      lesson: { path: 'lessons', key: 'lessons' },
+      lesson: { path: 'lessons?limit=500&order=usage', key: 'lessons' },
       action: { path: 'actions', key: 'actions' },
       crystal: { path: 'crystals', key: 'crystals' },
       semantic: { path: 'semantic', key: 'facts', fallbackKey: 'semantic' },
@@ -6249,12 +6250,23 @@
     function lessonRows() {
       var l = state.lessons;
       var search = String(l.search || '').trim().toLowerCase();
-      return sortByTimeDesc(entityList('lesson').filter(function(x) {
+      var rows = entityList('lesson').filter(function(x) {
         if (!x || x.deleted === true) return false;
         if (l.projectFilter && (x.project || '') !== l.projectFilter) return false;
         if (search && (String(x.content || '') + ' ' + String(x.context || '') + ' ' + asTags(x.tags).join(' ')).toLowerCase().indexOf(search) < 0) return false;
         return true;
-      }), ['updatedAt', 'createdAt']);
+      });
+      // Most-used first. Sorting by date hid exactly the thing worth seeing:
+      // a lesson that keeps earning its place should outrank a newer one
+      // that has never been surfaced.
+      rows.sort(function(a, b) {
+        var byUse = (b.surfacedCount || 0) - (a.surfacedCount || 0);
+        if (byUse !== 0) return byUse;
+        var byLastUse = String(b.lastSurfacedAt || '').localeCompare(String(a.lastSurfacedAt || ''));
+        if (byLastUse !== 0) return byLastUse;
+        return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+      });
+      return rows;
     }
 
     function lessonToolbarHtml(total) {
@@ -6276,9 +6288,9 @@
       var selected = state.lessons.selectedId === x.id;
       var html = '<tr class="lesson-row' + (selected ? ' row-select' : '') + (isFresh(x.id) ? ' fresh' : '') + '" data-action="select-lesson" data-lesson-id="' + esc(x.id) + '" role="button" tabindex="0" aria-expanded="' + (selected ? 'true' : 'false') + '" style="cursor:pointer;">';
       html += '<td style="max-width:0;width:100%;"><div class="mem-head clamp-2">' + esc(x.content) + '</div>' + (x.context ? '<div class="mem-excerpt">' + esc(x.context) + '</div>' : '');
-      html += '<div class="mem-chips">' + (x.project ? '<span class="mem-chip" style="cursor:default;">' + esc(x.project) + '</span>' : '') + '<span class="badge badge-' + (x.source === 'crystal' ? 'purple' : x.source === 'consolidation' ? 'yellow' : 'blue') + '">' + esc(x.source || 'manual') + '</span>' + ((x.sourceIds || []).length ? '<span>' + x.sourceIds.length + ' source' + (x.sourceIds.length === 1 ? '' : 's') + '</span>' : '') + '<span class="mob-only">' + pct + '% · ' + (x.reinforcements || 0) + ' uses</span></div></td>';
+      html += '<div class="mem-chips">' + (x.project ? '<span class="mem-chip" style="cursor:default;">' + esc(x.project) + '</span>' : '') + '<span class="badge badge-' + (x.source === 'crystal' ? 'purple' : x.source === 'consolidation' ? 'yellow' : 'blue') + '">' + esc(x.source || 'manual') + '</span>' + ((x.sourceIds || []).length ? '<span>' + x.sourceIds.length + ' source' + (x.sourceIds.length === 1 ? '' : 's') + '</span>' : '') + '<span class="mob-only">' + pct + '% · ' + fmtNum(x.surfacedCount || 0) + ' used</span></div></td>';
       html += '<td class="col-opt" style="white-space:nowrap;" title="Confidence ' + pct + '%"><div class="strength-bar"><div class="fill" style="width:' + pct + '%;background:' + confColor(pct) + '"></div></div> <span class="strength-num">' + pct + '%</span></td>';
-      html += '<td class="col-opt" style="text-align:center;font-family:var(--font-mono);font-size:12px;">' + (x.reinforcements || 0) + '</td>';
+      html += '<td class="col-opt" style="text-align:center;font-family:var(--font-mono);font-size:12px;" title="Times surfaced into a session context">' + fmtNum(x.surfacedCount || 0) + '</td>';
       html += '<td class="col-opt">' + relTime(x.updatedAt || x.createdAt) + '</td>';
       return html + '</tr>';
     }
@@ -6299,8 +6311,9 @@
       html += '<div class="mem-section"><div class="mem-section-title">Details</div><dl class="mem-meta">';
       if (x.context) html += '<dt>Why learned</dt><dd>' + esc(x.context) + '</dd>';
       html += '<dt>Confidence ' + help('confidence') + '</dt><dd><span class="conf-line"><span class="hbar' + (pct < 40 ? ' bad' : pct < 70 ? ' warn' : '') + '"><span style="width:' + pct + '%"></span></span><b>' + pct + '%</b></span></dd>';
-      html += '<dt>Uses ' + help('reinforcements') + '</dt><dd>' + fmtNum(x.reinforcements || 0) + (x.lastReinforcedAt ? ', last ' + relTime(x.lastReinforcedAt) : ', never confirmed again yet') + '</dd>';
-      var baseline = x.lastDecayedAt || x.lastReinforcedAt || x.createdAt;
+      html += '<dt>Used ' + help('usage') + '</dt><dd>' + fmtNum(x.surfacedCount || 0) + ' time' + ((x.surfacedCount || 0) === 1 ? '' : 's') + ' surfaced' + (x.lastSurfacedAt ? ', last ' + relTime(x.lastSurfacedAt) : ', never surfaced yet') + '</dd>';
+      html += '<dt>Re-learned ' + help('reinforcements') + '</dt><dd>' + fmtNum(x.reinforcements || 0) + (x.lastReinforcedAt ? ', last ' + relTime(x.lastReinforcedAt) : ', never learned a second time') + '</dd>';
+      var baseline = x.lastSurfacedAt || x.lastDecayedAt || x.lastReinforcedAt || x.createdAt;
       var weeks = baseline ? (Date.now() - new Date(baseline).getTime()) / (7 * 86400000) : 0;
       var rate = typeof x.decayRate === 'number' ? x.decayRate : 0.05;
       var daysLeft = Math.max(1, Math.ceil((1 - weeks) * 7));
@@ -6374,7 +6387,7 @@
           steps: [{ label: 'Search by meaning on the server instead:', cmd: curlPost('lessons/search', { query: l.search || 'deploy', project: l.projectFilter || undefined }) }]
         }) + '<div style="margin-top:10px;"><button type="button" class="btn" data-action="lesson-clear-filters">Clear filters</button></div>';
       } else {
-        html = '<div class="table-wrap"><table class="mem-table"><thead><tr><th>Lesson</th><th class="col-opt">Confidence ' + help('confidence') + '</th><th class="col-opt">Uses ' + help('reinforcements') + '</th><th class="col-opt">Updated</th></tr></thead><tbody>';
+        html = '<div class="table-wrap"><table class="mem-table"><thead><tr><th>Lesson</th><th class="col-opt">Confidence ' + help('confidence') + '</th><th class="col-opt">Used ' + help('usage') + '</th><th class="col-opt">Updated</th></tr></thead><tbody>';
         rows.forEach(function(x) { html += lessonRowHtml(x); });
         html += '</tbody></table></div>';
         if (all.length < 8) html += usageCard('lesson');

@@ -275,7 +275,12 @@ export function registerLessonsFunctions(sdk: IIIClient, kv: StateKV): void {
       source?: string;
       minConfidence?: number;
       limit?: number;
+      // `usage` surfaces the lessons that keep earning their place, which is
+      // the opposite of what confidence ordering shows: a lesson that is
+      // re-learned rarely has reinforcements above zero.
+      order?: "confidence" | "usage" | "recent";
     }) => {
+      const order = data.order ?? "confidence";
       const limit = data.limit ?? 50;
       const minConfidence = data.minConfidence ?? 0;
       let lessons = await kv.list<Lesson>(KV.lessons);
@@ -291,7 +296,25 @@ export function registerLessonsFunctions(sdk: IIIClient, kv: StateKV): void {
         lessons = lessons.filter((l) => l.source === data.source);
       }
 
-      lessons.sort((a, b) => b.confidence - a.confidence);
+      if (order === "usage") {
+        lessons.sort((a, b) => {
+          const byUse = (b.surfacedCount ?? 0) - (a.surfacedCount ?? 0);
+          if (byUse !== 0) return byUse;
+          const byRecency = String(b.lastSurfacedAt ?? "").localeCompare(
+            String(a.lastSurfacedAt ?? ""),
+          );
+          if (byRecency !== 0) return byRecency;
+          return b.confidence - a.confidence;
+        });
+      } else if (order === "recent") {
+        lessons.sort((a, b) =>
+          String(b.updatedAt || b.createdAt).localeCompare(
+            String(a.updatedAt || a.createdAt),
+          ),
+        );
+      } else {
+        lessons.sort((a, b) => b.confidence - a.confidence);
+      }
 
       return { success: true, lessons: lessons.slice(0, limit) };
     },
